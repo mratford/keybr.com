@@ -263,3 +263,113 @@ test("Controller deduplicates empty focus resets and identifies lifecycle ending
   fireEvent.keyDown(document.body, { code: "KeyS", key: "s" });
   assert.equal(page.records.length, count);
 });
+
+for (const held of [false, true]) {
+  test(`Controller ends a ${held ? "held" : "released"} modifier attempt on inactivity`, (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const page = setup();
+    t.after(() => page.view.unmount());
+    fireEvent.focus(page.input());
+    fireEvent.click(
+      page.view.getByTitle("Reset the current lesson", { exact: false }),
+    );
+    act(() => t.mock.timers.tick(10001));
+    assert.equal(page.records.length, 0);
+
+    fireEvent.keyDown(page.input(), { code: "ShiftLeft", key: "Shift" });
+    if (!held)
+      fireEvent.keyUp(page.input(), { code: "ShiftLeft", key: "Shift" });
+    const first = page.records.find((r) => r.type === "start");
+    assert.ok(first, "modifier keydown starts an attempt");
+    act(() => t.mock.timers.tick(9999));
+    assert.equal(ends(page.records).length, 0);
+    act(() => t.mock.timers.tick(2));
+    assert.deepEqual(
+      ends(page.records).map((r) => r.reason),
+      ["inactivity"],
+    );
+    assert.equal(
+      page.records.filter(
+        (r) => r.type === "original" && r.event.type === "keyup",
+      ).length,
+      held ? 0 : 1,
+    );
+
+    fireEvent(window, new window.Event("blur"));
+    fireEvent(document, new window.Event("visibilitychange"));
+    fireEvent(window, new window.Event("focus"));
+    assert.deepEqual(
+      ends(page.records).map((r) => r.reason),
+      ["inactivity"],
+    );
+    assert.equal(page.records.filter((r) => r.type === "start").length, 1);
+
+    page.type("a");
+    const starts = page.records.filter((r) => r.type === "start");
+    assert.equal(starts.length, 2);
+    assert.notEqual(starts[1].attemptId, first.attemptId);
+    if (held) {
+      fireEvent.keyUp(page.input(), { code: "ShiftLeft", key: "Shift" });
+      const release = page.records.find(
+        (r) =>
+          r.type === "original" &&
+          r.event.type === "keyup" &&
+          r.event.code === "ShiftLeft",
+      );
+      assert.equal(release?.attemptId, first.attemptId);
+    }
+    page.type("bcdefghij", 300);
+    assert.equal(page.results.length, 1);
+    assert.equal(page.progress.summaryStats.count, 1);
+    fireEvent(window, new window.Event("blur"));
+    fireEvent(document, new window.Event("visibilitychange"));
+    fireEvent(window, new window.Event("focus"));
+    act(() => t.mock.timers.tick(10001));
+    page.view.unmount();
+    assert.deepEqual(
+      ends(page.records).map((r) => r.reason),
+      ["inactivity", "completed"],
+    );
+  });
+}
+
+for (const { code, key } of [
+  { code: "ShiftLeft", key: "Shift" },
+  { code: "KeyA", key: "a" },
+]) {
+  test(`Controller ignores repeated ${key} keydowns for inactivity scheduling`, (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const page = setup();
+    t.after(() => page.view.unmount());
+    fireEvent.keyDown(page.input(), { code, key });
+    for (let i = 0; i < 11; i++) {
+      act(() => t.mock.timers.tick(1000));
+      fireEvent.keyDown(page.input(), { code, key, repeat: true });
+    }
+    assert.deepEqual(
+      ends(page.records).map((r) => r.reason),
+      ["inactivity"],
+    );
+    const count = page.records.length;
+    act(() => t.mock.timers.tick(10001));
+    assert.equal(page.records.length, count);
+    fireEvent.keyUp(page.input(), { code, key });
+    assert.equal(page.records.filter((r) => r.type === "start").length, 1);
+    assert.equal(page.results.length, 0);
+  });
+}
+
+test("Controller preserves an existing input inactivity deadline on modifier keydown", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const page = setup();
+  t.after(() => page.view.unmount());
+  page.type("a");
+  act(() => t.mock.timers.tick(9000));
+  fireEvent.keyDown(page.input(), { code: "ShiftLeft", key: "Shift" });
+  fireEvent.keyUp(page.input(), { code: "ShiftLeft", key: "Shift" });
+  act(() => t.mock.timers.tick(1001));
+  assert.deepEqual(
+    ends(page.records).map((r) => r.reason),
+    ["inactivity"],
+  );
+});

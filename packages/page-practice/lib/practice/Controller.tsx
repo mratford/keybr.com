@@ -12,6 +12,7 @@ import {
   deleteKey,
   emulateLayout,
   type InputListener,
+  type InputObserver,
 } from "@keybr/textinput-events";
 import { makeSoundPlayer } from "@keybr/textinput-sounds";
 import {
@@ -127,6 +128,8 @@ function useLessonState(
       setDepressedKeys((state.depressedKeys = []));
       timeout.cancel();
     };
+    const scheduleInactivity = () =>
+      timeout.schedule(() => reset("inactivity"), 10000);
     const handleResetLesson = () => reset("reset");
     const handleFocusReset = () => reset("focus-loss");
     const handleSkipLesson = () => {
@@ -154,7 +157,7 @@ function useLessonState(
         const feedback = state.onInput(event);
         setLines(state.lines);
         playSounds(feedback);
-        timeout.schedule(() => reset("inactivity"), 10000);
+        scheduleInactivity();
       },
     };
     const { onKeyDown, onKeyUp, onInput } = emulateLayout(
@@ -164,7 +167,22 @@ function useLessonState(
     );
     return {
       prepare,
-      inputObserver: recorder ?? undefined,
+      inputObserver: recorder
+        ? ({
+            onEvent: (event) => {
+              // A modifier can start an attempt without producing text input.
+              // Preserve existing input deadlines and ignore held-key repeats.
+              if (
+                event.type === "keydown" &&
+                "repeat" in event &&
+                !event.repeat &&
+                !timeout.pending
+              )
+                scheduleInactivity();
+              return recorder.onEvent(event);
+            },
+          } satisfies InputObserver)
+        : undefined,
       handleFocusReset,
       state,
       handleResetLesson,
