@@ -252,3 +252,26 @@ test("page exit starts keepalive synchronously while normal delivery is in fligh
   await sending;
   queue.close();
 });
+
+test("acknowledgement cleanup uses bounded counts without scanning the backlog", async (t) => {
+  const queue = await RecordingQueue.open(new IDBFactory());
+  t.after(() => queue.close());
+  const record = start();
+  await queue.enqueue(record, "owner", [], true);
+  await queue.enqueue(end(record), "owner", []);
+  const batch = await queue.batch();
+  for (let n = 0; n < 300; n++) await queue.enqueue(start(), "other", []);
+  const store = queue.database.transaction("records").objectStore("records");
+  const prototype = Object.getPrototypeOf(store);
+  const cursors = t.mock.method(prototype, "openCursor", () => {
+    throw new Error("Acknowledgement must not scan the queue");
+  });
+  const counts = t.mock.method(prototype, "count");
+  await queue.acknowledge(batch, ack(batch));
+  assert.equal(cursors.mock.callCount(), 0);
+  assert.equal(counts.mock.callCount(), 5);
+  counts.mock.restore();
+  cursors.mock.restore();
+  assert.equal((await queue.status()).queued, 300);
+  assert.equal((await queue.status()).notices, 0);
+});

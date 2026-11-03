@@ -261,31 +261,43 @@ export class RecordingQueue {
       tx.objectStore("records").delete([record.attemptId, record.sequence]);
     for (const notice of ack.recovery)
       tx.objectStore("notices").delete(canonicalJson(notice));
-    // Requests below run after the exact deletions above, in the same transaction.
-    const pending = new Set<string>();
-    let scans = 0;
-    const prune = () => {
-      if (++scans !== 2) return;
-      const request = tx.objectStore("attempts").openCursor();
+    // Only these attempts can have become empty after the exact deletions above.
+    const affected = new Set(
+      [...ack.records, ...ack.recovery].map(({ attemptId }) => attemptId),
+    );
+    for (const id of affected) {
+      const request = tx.objectStore("attempts").get(id);
       request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) return;
-        const attempt: Attempt = cursor.value;
-        if ((attempt.ended || attempt.interrupted) && !pending.has(attempt.id))
-          cursor.delete();
-        cursor.continue();
-      };
-    };
-    for (const name of ["records", "notices"]) {
-      const request = tx.objectStore(name).openCursor();
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) {
-          prune();
-          return;
+        const attempt: Attempt | undefined = request.result;
+        if (!attempt || (!attempt.ended && !attempt.interrupted)) return;
+        const records = tx
+          .objectStore("records")
+          .count(IDBKeyRange.bound([id], [id, Infinity]));
+        // Notice keys are canonical JSON of these three fields. Check the four
+        // possible identities directly, preserving the existing browser schema.
+        const notices = [];
+        for (const incomplete of [false, true]) {
+          for (const interrupted of [false, true]) {
+            notices.push(
+              tx.objectStore("notices").count(
+                canonicalJson({
+                  attemptId: id,
+                  incomplete,
+                  interrupted,
+                }),
+              ),
+            );
+          }
         }
-        pending.add(cursor.value.attemptId);
-        cursor.continue();
+        let remaining = notices.length + 1;
+        let pending = 0;
+        for (const count of [records, ...notices]) {
+          count.onsuccess = () => {
+            pending += count.result;
+            if (--remaining === 0 && pending === 0)
+              tx.objectStore("attempts").delete(id);
+          };
+        }
       };
     }
     await done;

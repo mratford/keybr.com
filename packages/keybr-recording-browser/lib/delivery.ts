@@ -6,8 +6,18 @@ export class RecordingDelivery {
   #terminal = false;
   #exitBatch?: RecordingBatch;
 
-  async prepareExit() {
-    this.#exitBatch = await this.queue.batch(48000);
+  #preparing?: Promise<void>;
+
+  prepareExit() {
+    // Repeated hidden events share one read; completion cannot overwrite a newer batch.
+    return (this.#preparing ??= this.queue
+      .batch(48000)
+      .then((batch) => {
+        this.#exitBatch = batch;
+      })
+      .finally(() => {
+        this.#preparing = undefined;
+      }));
   }
 
   constructor(
@@ -38,7 +48,6 @@ export class RecordingDelivery {
     if (this.#sending || this.#terminal) return;
     this.#sending = true;
     try {
-      await this.prepareExit();
       const batch = await this.queue.batch();
       if (!batch.records.length && !batch.recovery.length) return;
       const response = await this.request("/_/recording/batches", {
@@ -63,7 +72,6 @@ export class RecordingDelivery {
         recovery: RecordingBatch["recovery"];
       };
       await this.queue.acknowledge(batch, ack);
-      await this.prepareExit();
       return true;
     } finally {
       this.#sending = false;

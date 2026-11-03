@@ -30,6 +30,14 @@ export class RecordingRuntime {
     void this.#delivery?.flush(true).catch(() => {});
   };
 
+  readonly #visibility = () => {
+    if (document.visibilityState !== "hidden") return;
+    void this.#delivery
+      ?.prepareExit()
+      .then(() => this.#delivery?.flush(true))
+      .catch(() => {});
+  };
+
   constructor(
     readonly request: typeof fetch = fetch,
     readonly openQueue = () => RecordingQueue.open(),
@@ -40,6 +48,7 @@ export class RecordingRuntime {
     window.clearTimeout(this.#retry);
     window.removeEventListener("online", this.#online);
     window.removeEventListener("pagehide", this.#exit);
+    document.removeEventListener("visibilitychange", this.#visibility);
     this.#release?.();
     this.#queue?.close();
   }
@@ -94,19 +103,19 @@ export class RecordingRuntime {
           keymap: config.keymap,
           onRecord: (record) => {
             // Create the browser transaction immediately; never wait for the network here.
+            const incomplete = this.#failed.has(record.attemptId);
             void queue
-              .enqueue(
-                record,
-                this.#owner,
-                config.snapshots,
-                this.#failed.has(record.attemptId),
-              )
-              .then(() => this.#delivery?.prepareExit())
+              .enqueue(record, this.#owner, config.snapshots, incomplete)
+              .then(() => {
+                // This transaction committed the incomplete notice too.
+                if (incomplete) this.#failed.delete(record.attemptId);
+              })
               .catch((error: unknown) => {
                 this.#failed.add(record.attemptId);
                 this.storageFailure(error);
                 void queue
                   .markIncomplete(record.attemptId, this.#owner)
+                  .then(() => this.#failed.delete(record.attemptId))
                   .catch((failure: unknown) => this.storageFailure(failure));
               });
           },
@@ -115,6 +124,7 @@ export class RecordingRuntime {
       });
       window.addEventListener("online", this.#online);
       window.addEventListener("pagehide", this.#exit);
+      document.addEventListener("visibilitychange", this.#visibility);
       this.#timer = window.setInterval(this.#online, 2000);
       await this.tick();
     } catch (error) {

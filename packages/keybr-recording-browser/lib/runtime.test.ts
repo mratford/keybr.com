@@ -178,3 +178,93 @@ test("configuration failure without an enabled cache stays silent", async () => 
   assert.deepEqual(runtime.state, { options: null, status: null });
   runtime.close();
 });
+
+test("committed incomplete end clears failed retries before acknowledgement prunes the attempt", async (t) => {
+  installLocks(t);
+  const queue = await RecordingQueue.open(new IDBFactory());
+  const runtime = new RecordingRuntime(offline, async () => queue);
+  t.after(() => runtime.close());
+  await runtime.start();
+  const record = start();
+  runtime.state.options!.onRecord(record);
+  await queue.status();
+  const owner = (await queue.owners())[0];
+  const enqueue = t.mock.method(queue, "enqueue", async () => {
+    throw new Error("quota");
+  });
+  const mark = t.mock.method(queue, "markIncomplete", async () => {
+    throw new Error("quota");
+  });
+  runtime.state.options!.onRecord({ ...record, sequence: 1 });
+  await setImmediate();
+  enqueue.mock.restore();
+  runtime.state.options!.onRecord({
+    schemaVersion: 1,
+    attemptId: record.attemptId,
+    sequence: 2,
+    observedAt: 2,
+    type: "end",
+    reason: "reset",
+    result: null,
+    resultAccepted: null,
+  });
+  const batch = await queue.batch();
+  await setImmediate();
+  await queue.acknowledge(batch, {
+    records: batch.records.map(({ attemptId, sequence }) => ({
+      attemptId,
+      sequence,
+    })),
+    recovery: batch.recovery,
+  });
+  mark.mock.restore();
+  const retry = t.mock.method(queue, "markIncomplete");
+  await runtime.tick();
+  assert.equal(retry.mock.callCount(), 0);
+  assert.deepEqual(await queue.owners(), []);
+  await queue.interrupt(owner);
+  assert.deepEqual(await queue.status(), {
+    queued: 0,
+    notices: 0,
+    incomplete: 0,
+    interrupted: 0,
+  });
+});
+
+test("typing and normal flush do not prepare exit batches; hidden events coalesce", async (t) => {
+  installLocks(t);
+  const queue = await RecordingQueue.open(new IDBFactory());
+  let keepalives = 0;
+  const runtime = new RecordingRuntime(
+    async (url, options) => {
+      if (url === "/_/recording/config") return Response.json(config);
+      if (options?.keepalive) {
+        keepalives++;
+        return new Response();
+      }
+      throw new Error("offline");
+    },
+    async () => queue,
+  );
+  t.after(() => runtime.close());
+  await runtime.start();
+  const batch = t.mock.method(queue, "batch");
+  runtime.state.options!.onRecord(start());
+  await queue.status();
+  await setImmediate();
+  assert.equal(batch.mock.callCount(), 0);
+  await runtime.tick();
+  assert.equal(batch.mock.callCount(), 1);
+  assert.deepEqual(batch.mock.calls[0].arguments, []);
+  t.mock.getter(document, "visibilityState", () => "hidden");
+  document.dispatchEvent(new window.Event("visibilitychange"));
+  document.dispatchEvent(new window.Event("visibilitychange"));
+  // A queue read acts as a barrier after the hidden handler's read transaction.
+  await queue.status();
+  await setImmediate();
+  assert.equal(batch.mock.callCount(), 2);
+  assert.deepEqual(batch.mock.calls[1].arguments, [48000]);
+  assert.ok(keepalives > 0);
+  window.dispatchEvent(new window.Event("pagehide"));
+  assert.ok(keepalives > 1);
+});

@@ -4,6 +4,9 @@ Set `DETAILED_RECORDING=true` in `.env`, then restart the server and reload the
 practice page. The default is `false`. The server binds to `127.0.0.1` in
 recording mode. Use `http://localhost:3000/` locally; no login is required.
 This is a personal local mode. Keep it on loopback when configuring a proxy.
+The proxy must forward `Host: localhost:<port>` or `Host: 127.0.0.1:<port>`,
+using the backend listening port (omit the port for port 80). Other Host values
+receive an empty 403 response in recording mode.
 `APPLICATION_REVISION` optionally labels the application revision (default `local`).
 
 The practice page shows availability, queued records, recovery notices and
