@@ -90,7 +90,8 @@ export class RecordingRuntime {
   };
 
   constructor(
-    readonly request: typeof fetch = fetch,
+    // Never store bare fetch: browsers throw "Illegal invocation" unless this is window.
+    readonly request: typeof fetch = (input, init) => fetch(input, init),
     readonly openQueue = () => RecordingQueue.open(),
   ) {}
 

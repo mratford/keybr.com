@@ -22,7 +22,8 @@ export class RecordingDelivery {
 
   constructor(
     readonly queue: RecordingQueue,
-    readonly request: typeof fetch = fetch,
+    // Never store bare fetch: browsers throw "Illegal invocation" unless this is window.
+    readonly request: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   /** Safe for concurrent tabs: only exact, committed server acknowledgements remove records. */

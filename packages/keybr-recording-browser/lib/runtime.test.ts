@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { locks } from "node:worker_threads";
 import { type KeyboardCatalogue, type RecordingRecord } from "@keybr/recording";
 import { IDBFactory } from "fake-indexeddb";
+import { RecordingDelivery } from "./delivery.ts";
 import { RecordingQueue } from "./queue.ts";
 import { RecordingRuntime, selectionKey } from "./runtime.ts";
 
@@ -473,4 +474,30 @@ test("an unavailable remembered selection is visible and never replaced by anoth
     );
     runtime.close();
   }
+});
+
+test("default requests call fetch as browsers require, not as a method", async (t) => {
+  window.localStorage.removeItem(selectionKey);
+  // Browsers reject fetch called with any receiver other than the global object.
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", function (this: unknown, url: string) {
+    if (this !== undefined && this !== globalThis)
+      throw new TypeError(
+        "Failed to execute 'fetch' on 'Window': Illegal invocation",
+      );
+    calls.push(url);
+    return Promise.resolve(Response.json({ enabled: false }));
+  });
+  const runtime = new RecordingRuntime();
+  await runtime.start();
+  runtime.close();
+  assert.deepEqual(calls, ["/_/recording/config"]);
+  const queue = await RecordingQueue.open(new IDBFactory());
+  t.after(() => queue.close());
+  await queue.enqueue(start(), "owner", []);
+  await assert.rejects(
+    new RecordingDelivery(queue).flush(),
+    /Invalid recording acknowledgement/,
+  );
+  assert.deepEqual(calls, ["/_/recording/config", "/_/recording/batches"]);
 });
