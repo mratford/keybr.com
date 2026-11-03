@@ -101,6 +101,7 @@ export class RecordingRuntime {
                 config.snapshots,
                 this.#failed.has(record.attemptId),
               )
+              .then(() => this.#delivery?.prepareExit())
               .catch((error: unknown) => {
                 this.#failed.add(record.attemptId);
                 this.storageFailure(error);
@@ -123,7 +124,7 @@ export class RecordingRuntime {
       this.update({
         status: available
           ? `Browser recording unavailable: ${String(error)}`
-          : `Availability unavailable: ${String(error)}`,
+          : null,
       });
       this.#started = false;
       this.#retry = window.setTimeout(() => {

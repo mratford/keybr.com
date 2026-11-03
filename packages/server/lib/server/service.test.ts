@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { Server } from "node:http";
+import { IncomingMessage, Server, ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { test } from "node:test";
 import { Application } from "@fastr/core";
 import { Container } from "@fastr/invert";
@@ -33,6 +34,21 @@ test("recording mode binds to loopback; disabled mode preserves the default list
       3000,
       enabled ? "127.0.0.1" : undefined,
     ]);
+    if (enabled) {
+      for (const host of [
+        "attacker.example:3000",
+        "localhost:4000",
+        undefined,
+      ]) {
+        const req = new IncomingMessage(new Socket());
+        req.headers.host = host;
+        const res = new ServerResponse(req);
+        const end = t.mock.method(res, "end", () => res);
+        server.emit("request", req, res);
+        assert.equal(res.statusCode, 403);
+        assert.equal(end.mock.callCount(), 1);
+      }
+    }
     websocket.close();
   }
 });

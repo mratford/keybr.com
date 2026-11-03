@@ -1,7 +1,7 @@
 # Detailed local recording
 
 Set `DETAILED_RECORDING=true` in `.env`, then restart the server and reload the
-practice page. The default is `false`. Both HTTP servers bind to `127.0.0.1` in
+practice page. The default is `false`. The server binds to `127.0.0.1` in
 recording mode. Use `http://localhost:3000/` locally; no login is required.
 This is a personal local mode. Keep it on loopback when configuring a proxy.
 `APPLICATION_REVISION` optionally labels the application revision (default `local`).
@@ -43,7 +43,7 @@ Typing never waits for the network.
 
 Browser storage failures are visible and mark the affected Attempt incomplete.
 The incomplete marker is retried if storage initially refuses it. Previously
-queued records are preserved. If storage refuses *all* writes, the failure marker
+queued records are preserved. If storage refuses _all_ writes, the failure marker
 itself cannot become durable until storage recovers. Events whose browser
 transaction has not committed can be lost on shutdown; the queue cannot recover
 those events. Browser data clearing or eviction also removes local pending data.
@@ -94,3 +94,5 @@ with sqlite3.connect('/tmp/recordings-export.sqlite') as db:
 Tests use temporary SQLite databases and isolated IndexedDB factories, including
 Python readback with a live source connection, overlapping delivery, lost
 acknowledgements, browser transaction aborts and concurrent queue connections.
+
+With recording enabled, `npm run start-docker` listens only on the container loopback address and cannot be reached from the host.

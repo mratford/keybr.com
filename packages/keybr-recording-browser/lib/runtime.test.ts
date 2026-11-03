@@ -168,3 +168,13 @@ test("offline reload uses the last enabled configuration; a disabled response cl
     null,
   );
 });
+
+test("configuration failure without an enabled cache stays silent", async () => {
+  window.localStorage.clear();
+  const runtime = new RecordingRuntime(async () => {
+    throw new TypeError("Failed to fetch");
+  });
+  await runtime.start();
+  assert.deepEqual(runtime.state, { options: null, status: null });
+  runtime.close();
+});

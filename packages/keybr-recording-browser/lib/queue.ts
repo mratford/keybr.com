@@ -175,23 +175,40 @@ export class RecordingQueue {
     ]);
     const batch: RecordingBatch = {
       schemaVersion,
-      snapshots,
+      snapshots: [],
       records: [],
       recovery: [],
     };
-    const fits = () =>
-      new TextEncoder().encode(JSON.stringify(batch)).length <= byteLimit;
+    const encoder = new TextEncoder();
+    const bytes = (value: unknown) =>
+      encoder.encode(JSON.stringify(value)).length;
+    let size = bytes(batch);
     for (const notice of recovery) {
+      const extra = bytes(notice) + Number(batch.recovery.length > 0);
+      if (size + extra > byteLimit) break;
       batch.recovery.push(notice);
-      if (!fits()) {
-        batch.recovery.pop();
-        break;
-      }
+      size += extra;
     }
     for (const record of records) {
-      batch.records.push(record);
-      if (!fits()) {
-        batch.records.pop();
+      const needed = snapshots.filter(
+        (snapshot) =>
+          record.type === "start" &&
+          record.context[snapshot.kind]?.id === snapshot.id &&
+          record.context[snapshot.kind]?.version === snapshot.version &&
+          !batch.snapshots.includes(snapshot),
+      );
+      const extra =
+        bytes(record) +
+        Number(batch.records.length > 0) +
+        needed.reduce(
+          (sum, snapshot, index) =>
+            sum + bytes(snapshot) + Number(batch.snapshots.length + index > 0),
+          0,
+        );
+      if (
+        size + extra > byteLimit ||
+        batch.snapshots.length + needed.length > 16
+      ) {
         if (
           !batch.records.length &&
           !batch.recovery.length &&
@@ -202,6 +219,9 @@ export class RecordingQueue {
           );
         break;
       }
+      batch.records.push(record);
+      batch.snapshots.push(...needed);
+      size += extra;
     }
     return batch;
   }
@@ -232,27 +252,60 @@ export class RecordingQueue {
       ack.recovery.some((r) => !notices.has(canonicalJson(r)))
     )
       throw new Error("Invalid recording acknowledgement");
-    const tx = this.database.transaction(["records", "notices"], "readwrite");
+    const tx = this.database.transaction(
+      ["records", "notices", "attempts"],
+      "readwrite",
+    );
     const done = committed(tx);
     for (const record of ack.records)
       tx.objectStore("records").delete([record.attemptId, record.sequence]);
     for (const notice of ack.recovery)
       tx.objectStore("notices").delete(canonicalJson(notice));
+    // Requests below run after the exact deletions above, in the same transaction.
+    const pending = new Set<string>();
+    let scans = 0;
+    const prune = () => {
+      if (++scans !== 2) return;
+      const request = tx.objectStore("attempts").openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const attempt: Attempt = cursor.value;
+        if ((attempt.ended || attempt.interrupted) && !pending.has(attempt.id))
+          cursor.delete();
+        cursor.continue();
+      };
+    };
+    for (const name of ["records", "notices"]) {
+      const request = tx.objectStore(name).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          prune();
+          return;
+        }
+        pending.add(cursor.value.attemptId);
+        cursor.continue();
+      };
+    }
     await done;
   }
 
   async status() {
-    const tx = this.database.transaction(["records", "attempts", "notices"]);
-    const [queued, notices, attempts] = await Promise.all([
+    const tx = this.database.transaction(["records", "notices"]);
+    const [queued, pending] = await Promise.all([
       result(tx.objectStore("records").count()),
-      result(tx.objectStore("notices").count()),
-      result<Attempt[]>(tx.objectStore("attempts").getAll()),
+      result<Notice[]>(tx.objectStore("notices").getAll()),
     ]);
     return {
       queued,
-      notices,
-      incomplete: attempts.filter((a) => a.incomplete).length,
-      interrupted: attempts.filter((a) => a.interrupted).length,
+      notices: pending.length,
+      incomplete: new Set(
+        pending.filter((a) => a.incomplete).map((a) => a.attemptId),
+      ).size,
+      interrupted: new Set(
+        pending.filter((a) => a.interrupted).map((a) => a.attemptId),
+      ).size,
     };
   }
   close() {

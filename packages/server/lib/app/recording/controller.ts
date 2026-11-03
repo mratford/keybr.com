@@ -9,7 +9,11 @@ import {
   maxBatchBytes,
   schemaVersion,
 } from "@keybr/recording";
-import { RecordingConflict, RecordingStore } from "@keybr/recording-store";
+import {
+  RecordingConflict,
+  RecordingStore,
+  RecordingValidationError,
+} from "@keybr/recording-store";
 
 @injectable({ singleton: true })
 @controller()
@@ -47,7 +51,7 @@ export class RecordingController {
       if (error instanceof RecordingConflict)
         throw new HttpError(409, error.message);
       if (
-        error instanceof TypeError ||
+        error instanceof RecordingValidationError ||
         error instanceof RangeError ||
         (error instanceof Error && error.name === "ZodError")
       )

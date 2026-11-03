@@ -23,7 +23,22 @@ export class Service {
   }
 
   start({ app, port }: { app: Application; port: number }) {
-    const callback = app.callback();
+    const application = app.callback();
+    const recording = Env.getBoolean("DETAILED_RECORDING", false);
+    const callback: typeof application = (req, res) => {
+      const address = this.#server.address();
+      const listeningPort =
+        address && typeof address === "object" ? address.port : port;
+      const allowed = ["localhost", "127.0.0.1", "[::1]"].map((host) =>
+        listeningPort === 80 ? host : `${host}:${listeningPort}`,
+      );
+      if (recording && !allowed.includes(req.headers.host ?? "")) {
+        res.statusCode = 403;
+        res.end();
+        return;
+      }
+      application(req, res);
+    };
     this.#server.on("request", callback);
     this.#server.on("upgrade", (req, socket, head) => {
       if (head.length > 0) {

@@ -182,3 +182,73 @@ test("acknowledgements cannot remove identities outside the request", async () =
   assert.equal((await queue.status()).queued, 1);
   queue.close();
 });
+
+test("batches include only referenced snapshots and stop at sixteen versions", async () => {
+  const queue = await RecordingQueue.open(new IDBFactory());
+  for (let n = 0; n < 20; n++) {
+    const snapshot = { ...fixtureSnapshots[0], version: String(n) };
+    const record = start();
+    if (record.type !== "start") throw new Error("Expected start");
+    record.context.board = { id: snapshot.id, version: snapshot.version };
+    await queue.enqueue(record, "owner", [snapshot]);
+  }
+  const batch = await queue.batch();
+  assert.equal(batch.snapshots.length, 16);
+  assert.equal(batch.records.length, 16);
+  await queue.acknowledge(batch, ack(batch));
+  const next = await queue.batch();
+  assert.equal(next.snapshots.length, 4);
+  assert.equal(next.records.length, 4);
+  queue.close();
+});
+
+test("acknowledgement prunes finished attempts and pending recovery counts", async () => {
+  const queue = await RecordingQueue.open(new IDBFactory());
+  const record = start();
+  await queue.enqueue(record, "owner", []);
+  await queue.enqueue(end(record), "owner", []);
+  await queue.markIncomplete(record.attemptId, "owner");
+  const batch = await queue.batch();
+  await queue.acknowledge(batch, ack(batch));
+  assert.deepEqual(await queue.status(), {
+    queued: 0,
+    notices: 0,
+    incomplete: 0,
+    interrupted: 0,
+  });
+  const request = queue.database
+    .transaction("attempts")
+    .objectStore("attempts")
+    .count();
+  assert.equal(
+    await new Promise((resolve) => {
+      request.onsuccess = () => resolve(request.result);
+    }),
+    0,
+  );
+  queue.close();
+});
+
+test("page exit starts keepalive synchronously while normal delivery is in flight", async () => {
+  const queue = await RecordingQueue.open(new IDBFactory());
+  await queue.enqueue(start(), "owner", []);
+  let calls = 0;
+  let finish!: (response: Response) => void;
+  const delivery = new RecordingDelivery(queue, (_url, options) => {
+    calls++;
+    if (options?.keepalive) return Promise.resolve(new Response());
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  await delivery.prepareExit();
+  const sending = delivery.flush();
+  while (!finish) await new Promise((resolve) => setImmediate(resolve));
+  const exit = delivery.flush(true);
+  assert.equal(calls, 2);
+  await exit;
+  const batch = await queue.batch();
+  finish(Response.json(ack(batch)));
+  await sending;
+  queue.close();
+});

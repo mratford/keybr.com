@@ -8,6 +8,8 @@ import {
   schemaVersion,
 } from "@keybr/recording";
 
+export class RecordingValidationError extends Error {}
+
 export class RecordingConflict extends Error {}
 
 /** A dedicated database, never the account database or binary result files. */
@@ -73,7 +75,9 @@ export class RecordingStore {
       }
       for (const record of batch.records) {
         if ((record.type === "start") !== (record.sequence === 0))
-          throw new TypeError("Attempt start must have sequence zero");
+          throw new RecordingValidationError(
+            "Attempt start must have sequence zero",
+          );
         const json = canonicalJson(record);
         const existing = db
           .prepare("SELECT json FROM records WHERE attempt_id=? AND sequence=?")
@@ -94,7 +98,7 @@ export class RecordingStore {
                 )
                 .get(kind, ref.id, ref.version)
             )
-              throw new TypeError("Missing keyboard snapshot");
+              throw new RecordingValidationError("Missing keyboard snapshot");
           }
           db.prepare("UPDATE attempts SET context=? WHERE id=?").run(
             canonicalJson(record.context),

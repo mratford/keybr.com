@@ -4,6 +4,12 @@ import { type RecordingQueue } from "./queue.ts";
 export class RecordingDelivery {
   #sending = false;
   #terminal = false;
+  #exitBatch?: RecordingBatch;
+
+  async prepareExit() {
+    this.#exitBatch = await this.queue.batch(48000);
+  }
+
   constructor(
     readonly queue: RecordingQueue,
     readonly request: typeof fetch = fetch,
@@ -11,10 +17,29 @@ export class RecordingDelivery {
 
   /** Safe for concurrent tabs: only exact, committed server acknowledgements remove records. */
   async flush(exiting = false) {
+    if (exiting) {
+      const batch = this.#exitBatch;
+      if (
+        this.#terminal ||
+        !batch ||
+        (!batch.records.length && !batch.recovery.length)
+      )
+        return;
+      // Start fetch before yielding: pagehide cannot depend on IndexedDB completing.
+      await this.request("/_/recording/batches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(batch),
+        keepalive: true,
+      });
+      // Exit delivery is best effort; normal delivery verifies and applies acknowledgements.
+      return;
+    }
     if (this.#sending || this.#terminal) return;
     this.#sending = true;
     try {
-      const batch = await this.queue.batch(exiting ? 48000 : undefined);
+      await this.prepareExit();
+      const batch = await this.queue.batch();
       if (!batch.records.length && !batch.recovery.length) return;
       const response = await this.request("/_/recording/batches", {
         method: "POST",
@@ -38,6 +63,7 @@ export class RecordingDelivery {
         recovery: RecordingBatch["recovery"];
       };
       await this.queue.acknowledge(batch, ack);
+      await this.prepareExit();
       return true;
     } finally {
       this.#sending = false;

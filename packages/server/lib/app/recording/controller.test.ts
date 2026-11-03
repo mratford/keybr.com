@@ -11,6 +11,7 @@ import { HttpError } from "@fastr/errors";
 import { Container } from "@fastr/invert";
 import { Router } from "@fastr/middleware-router";
 import { fixtureSnapshots, type RecordingRecord } from "@keybr/recording";
+import { RecordingStore } from "@keybr/recording-store";
 import { createTestServer } from "../test/request.ts";
 import { RecordingController } from "./controller.ts";
 
@@ -28,9 +29,8 @@ test("recording routes are independent of login, bounded, versioned, transaction
       try {
         await next();
       } catch (error) {
-        if (!(error instanceof HttpError)) throw error;
-        ctx.response.status = error.status;
-        ctx.response.body = { error: error.message };
+        ctx.response.status = error instanceof HttpError ? error.status : 500;
+        ctx.response.body = { error: String(error) };
       }
     })
     .use(
@@ -96,6 +96,7 @@ test("recording routes are independent of login, bounded, versioned, transaction
   for (const invalid of [
     {},
     { ...batch, schemaVersion: 2 },
+    { ...batch, records: [{ ...record, sequence: 1 }] },
     { ...batch, records: [{ ...record, attemptId: "invalid" }] },
     { ...batch, records: Array(129).fill(record) },
   ]) {
@@ -120,5 +121,12 @@ test("recording routes are independent of login, bounded, versioned, transaction
         .send("{broken")
     ).status,
     400,
+  );
+  t.mock.method(RecordingStore.prototype, "append", () => {
+    throw new TypeError("Unexpected store bug");
+  });
+  assert.equal(
+    (await client.POST("/_/recording/batches").send(batch)).status,
+    500,
   );
 });
