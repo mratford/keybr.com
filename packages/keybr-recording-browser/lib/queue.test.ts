@@ -132,7 +132,7 @@ test("storage abort preserves existing queue; incomplete/interrupted notices sur
   await queue.enqueue(record, "owner", fixtureSnapshots);
   await assert.rejects(queue.enqueue(record, "owner", fixtureSnapshots));
   assert.equal((await queue.status()).queued, 1);
-  await queue.markIncomplete(record.attemptId, "owner");
+  await queue.markIncomplete(record.attemptId);
   const inFlight = await queue.batch();
   await queue.interrupt("owner");
   await queue.acknowledge(inFlight, ack(inFlight));
@@ -207,7 +207,7 @@ test("acknowledgement prunes finished attempts and pending recovery counts", asy
   const record = start();
   await queue.enqueue(record, "owner", []);
   await queue.enqueue(end(record), "owner", []);
-  await queue.markIncomplete(record.attemptId, "owner");
+  await queue.markIncomplete(record.attemptId);
   const batch = await queue.batch();
   await queue.acknowledge(batch, ack(batch));
   assert.deepEqual(await queue.status(), {
@@ -231,12 +231,16 @@ test("acknowledgement prunes finished attempts and pending recovery counts", asy
 
 test("page exit starts keepalive synchronously while normal delivery is in flight", async () => {
   const queue = await RecordingQueue.open(new IDBFactory());
-  await queue.enqueue(start(), "owner", []);
+  const record = start();
+  await queue.enqueue(record, "owner", []);
   let calls = 0;
   let finish!: (response: Response) => void;
   const delivery = new RecordingDelivery(queue, (_url, options) => {
     calls++;
-    if (options?.keepalive) return Promise.resolve(new Response());
+    if (options?.keepalive)
+      return Promise.resolve(
+        Response.json(ack(JSON.parse(String(options.body)))),
+      );
     return new Promise((resolve) => {
       finish = resolve;
     });
@@ -248,7 +252,13 @@ test("page exit starts keepalive synchronously while normal delivery is in fligh
   assert.equal(calls, 2);
   await exit;
   const batch = await queue.batch();
-  finish(Response.json(ack(batch)));
+  assert.equal(batch.records.length, 0);
+  finish(
+    Response.json({
+      records: [{ attemptId: record.attemptId, sequence: 0 }],
+      recovery: [],
+    }),
+  );
   await sending;
   queue.close();
 });
@@ -274,4 +284,34 @@ test("acknowledgement cleanup uses bounded counts without scanning the backlog",
   cursors.mock.restore();
   assert.equal((await queue.status()).queued, 300);
   assert.equal((await queue.status()).notices, 0);
+});
+
+test("incomplete notices for never persisted attempts do not create live owners", async () => {
+  const queue = await RecordingQueue.open(new IDBFactory());
+  const record = start();
+  await queue.markIncomplete(record.attemptId);
+  assert.deepEqual(await queue.owners(), []);
+  const notice = await queue.batch();
+  assert.equal(notice.recovery[0].incomplete, true);
+  await queue.enqueue(record, "owner", []);
+  assert.deepEqual(await queue.owners(), ["owner"]);
+  queue.close();
+});
+
+test("exit sends consume the prepared batch and failed requests retain durable records", async () => {
+  const queue = await RecordingQueue.open(new IDBFactory());
+  await queue.enqueue(start(), "owner", []);
+  let calls = 0;
+  const delivery = new RecordingDelivery(queue, async () => {
+    calls++;
+    throw new Error("offline");
+  });
+  await delivery.prepareExit();
+  await assert.rejects(delivery.flush(true), /offline/);
+  await delivery.flush(true);
+  assert.equal(calls, 1);
+  assert.equal((await queue.status()).queued, 1);
+  await assert.rejects(delivery.flush(), /offline/);
+  assert.equal(calls, 2);
+  queue.close();
 });

@@ -104,27 +104,32 @@ export class RecordingQueue {
     await done;
   }
 
-  async markIncomplete(id: string, owner: string) {
+  async markIncomplete(id: string) {
     const tx = this.database.transaction(["attempts", "notices"], "readwrite");
     const done = committed(tx);
     const store = tx.objectStore("attempts");
     const request = store.get(id);
     request.onsuccess = () => {
-      const attempt: Attempt = request.result ?? {
+      const attempt: Attempt | undefined = request.result;
+      if (attempt) {
+        attempt.incomplete = true;
+        store.put(attempt);
+      }
+      // A failed write may refer to an already pruned or never persisted attempt.
+      // Preserve its recovery notice without inventing an unended attempt.
+      this.notice(tx, {
         id,
-        owner,
-        ended: false,
-        interrupted: false,
         incomplete: true,
-      };
-      attempt.incomplete = true;
-      store.put(attempt);
-      this.notice(tx, attempt);
+        interrupted: attempt?.interrupted ?? false,
+      });
     };
     await done;
   }
 
-  private notice(tx: IDBTransaction, attempt: Attempt) {
+  private notice(
+    tx: IDBTransaction,
+    attempt: Pick<Attempt, "id" | "incomplete" | "interrupted">,
+  ) {
     const value: Notice = {
       attemptId: attempt.id,
       incomplete: attempt.incomplete,

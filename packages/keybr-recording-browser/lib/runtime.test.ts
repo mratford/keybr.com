@@ -240,7 +240,16 @@ test("typing and normal flush do not prepare exit batches; hidden events coalesc
       if (url === "/_/recording/config") return Response.json(config);
       if (options?.keepalive) {
         keepalives++;
-        return new Response();
+        const batch = JSON.parse(String(options.body));
+        return Response.json({
+          records: batch.records.map(
+            ({ attemptId, sequence }: RecordingRecord) => ({
+              attemptId,
+              sequence,
+            }),
+          ),
+          recovery: batch.recovery,
+        });
       }
       throw new Error("offline");
     },
@@ -264,7 +273,79 @@ test("typing and normal flush do not prepare exit batches; hidden events coalesc
   await setImmediate();
   assert.equal(batch.mock.callCount(), 2);
   assert.deepEqual(batch.mock.calls[1].arguments, [48000]);
-  assert.ok(keepalives > 0);
+  assert.equal(keepalives, 1);
   window.dispatchEvent(new window.Event("pagehide"));
-  assert.ok(keepalives > 1);
+  assert.equal(keepalives, 1);
+});
+
+test("same-turn failed keystroke and committed end cannot resurrect a pruned attempt", async (t) => {
+  installLocks(t);
+  const queue = await RecordingQueue.open(new IDBFactory());
+  const runtime = new RecordingRuntime(offline, async () => queue);
+  t.after(() => runtime.close());
+  await runtime.start();
+  const record = start();
+  runtime.state.options!.onRecord(record);
+  await queue.status();
+  const owner = (await queue.owners())[0];
+  const enqueue = queue.enqueue.bind(queue);
+  const writes = t.mock.method(
+    queue,
+    "enqueue",
+    (...args: Parameters<RecordingQueue["enqueue"]>) => {
+      if (args[0].sequence === 1) return Promise.reject(new Error("quota"));
+      return enqueue(...args);
+    },
+  );
+  const marker = t.mock.method(queue, "markIncomplete", async () => {
+    throw new Error("quota");
+  });
+  // Both calls capture incomplete=false before either promise settles.
+  runtime.state.options!.onRecord({ ...record, sequence: 1 });
+  runtime.state.options!.onRecord({
+    schemaVersion: 1,
+    attemptId: record.attemptId,
+    sequence: 2,
+    observedAt: 2,
+    type: "end",
+    reason: "reset",
+    result: null,
+    resultAccepted: null,
+  });
+  const batch = await queue.batch();
+  await setImmediate();
+  assert.deepEqual(
+    writes.mock.calls.map((call) => call.arguments[3]),
+    [false, false],
+  );
+  assert.equal(marker.mock.callCount(), 1);
+  assert.deepEqual(
+    batch.records.map((record) => record.type),
+    ["start", "end"],
+  );
+  assert.equal(batch.recovery.length, 0);
+  await queue.acknowledge(batch, {
+    records: batch.records.map(({ attemptId, sequence }) => ({
+      attemptId,
+      sequence,
+    })),
+    recovery: batch.recovery,
+  });
+  marker.mock.restore();
+  await runtime.tick();
+  assert.deepEqual(await queue.owners(), []);
+  await queue.interrupt(owner);
+  assert.deepEqual(await queue.status(), {
+    queued: 0,
+    notices: 1,
+    incomplete: 1,
+    interrupted: 0,
+  });
+  assert.deepEqual((await queue.batch()).recovery, [
+    {
+      attemptId: record.attemptId,
+      incomplete: true,
+      interrupted: false,
+    },
+  ]);
 });

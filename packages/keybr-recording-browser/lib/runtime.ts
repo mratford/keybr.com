@@ -114,7 +114,7 @@ export class RecordingRuntime {
                 this.#failed.add(record.attemptId);
                 this.storageFailure(error);
                 void queue
-                  .markIncomplete(record.attemptId, this.#owner)
+                  .markIncomplete(record.attemptId)
                   .then(() => this.#failed.delete(record.attemptId))
                   .catch((failure: unknown) => this.storageFailure(failure));
               });
@@ -203,7 +203,7 @@ export class RecordingRuntime {
     try {
       // Retry incomplete markers if a quota failure prevented the first write.
       for (const id of this.#failed) {
-        await this.#queue!.markIncomplete(id, this.#owner);
+        await this.#queue!.markIncomplete(id);
         this.#failed.delete(id);
       }
     } catch (error) {

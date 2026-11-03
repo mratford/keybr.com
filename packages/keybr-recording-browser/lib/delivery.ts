@@ -35,46 +35,45 @@ export class RecordingDelivery {
         (!batch.records.length && !batch.recovery.length)
       )
         return;
+      // Consume before sending: pagehide must not duplicate an in-flight hidden request.
+      this.#exitBatch = undefined;
       // Start fetch before yielding: pagehide cannot depend on IndexedDB completing.
-      await this.request("/_/recording/batches", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(batch),
-        keepalive: true,
-      });
-      // Exit delivery is best effort; normal delivery verifies and applies acknowledgements.
-      return;
+      return this.send(batch, true);
     }
     if (this.#sending || this.#terminal) return;
     this.#sending = true;
     try {
       const batch = await this.queue.batch();
       if (!batch.records.length && !batch.recovery.length) return;
-      const response = await this.request("/_/recording/batches", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(batch),
-        keepalive: exiting,
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok) {
-        // Retain terminal failures for inspection/recovery; do not spin on invalid data.
-        this.#terminal =
-          response.status >= 400 &&
-          response.status < 500 &&
-          ![408, 429].includes(response.status);
-        throw new Error(
-          `Recording server returned ${response.status}; queued data retained`,
-        );
-      }
-      const ack = (await response.json()) as {
-        records: { attemptId: string; sequence: number }[];
-        recovery: RecordingBatch["recovery"];
-      };
-      await this.queue.acknowledge(batch, ack);
-      return true;
+      return await this.send(batch, false);
     } finally {
       this.#sending = false;
     }
+  }
+
+  private async send(batch: RecordingBatch, exiting: boolean) {
+    const response = await this.request("/_/recording/batches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(batch),
+      keepalive: exiting,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) {
+      // Retain terminal failures for inspection/recovery; do not spin on invalid data.
+      this.#terminal =
+        response.status >= 400 &&
+        response.status < 500 &&
+        ![408, 429].includes(response.status);
+      throw new Error(
+        `Recording server returned ${response.status}; queued data retained`,
+      );
+    }
+    const ack = (await response.json()) as {
+      records: { attemptId: string; sequence: number }[];
+      recovery: RecordingBatch["recovery"];
+    };
+    await this.queue.acknowledge(batch, ack);
+    return true;
   }
 }
