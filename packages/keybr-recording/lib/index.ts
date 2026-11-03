@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { keyboardCatalogueSchema } from "./keyboards.ts";
+
+export * from "./keyboards.ts";
 
 export const schemaVersion = 1;
 const position = z.number().int().nonnegative();
@@ -315,6 +318,7 @@ export const batchSchema = z.strictObject({
     .max(128),
 });
 export type RecordingBatch = z.infer<typeof batchSchema>;
+/** Test fixtures for batch transport; real keyboards are imported (see keyboards.ts). */
 export const fixtureSnapshots: RecordingBatch["snapshots"] = [
   {
     kind: "board",
@@ -366,9 +370,9 @@ export const recordingConfigSchema = z.discriminatedUnion("enabled", [
   z.strictObject({
     enabled: z.literal(true),
     schemaVersion: z.literal(schemaVersion),
-    snapshots: z.array(snapshotSchema).max(16),
     applicationRevision: z.string().min(1),
-    board: versionReference.nullable(),
-    keymap: versionReference.nullable(),
+    /** Imported keyboards. Their snapshots are already stored on the server. */
+    keyboards: keyboardCatalogueSchema,
   }),
 ]);
+export type RecordingConfig = z.infer<typeof recordingConfigSchema>;

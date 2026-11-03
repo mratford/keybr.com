@@ -2,19 +2,37 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { locks } from "node:worker_threads";
-import { fixtureSnapshots, type RecordingRecord } from "@keybr/recording";
+import { type KeyboardCatalogue, type RecordingRecord } from "@keybr/recording";
 import { IDBFactory } from "fake-indexeddb";
+import { RecordingDelivery } from "./delivery.ts";
 import { RecordingQueue } from "./queue.ts";
-import { RecordingRuntime } from "./runtime.ts";
+import { RecordingRuntime, selectionKey } from "./runtime.ts";
 
+const layout = (letterLayout: string, vil: string, definition = "d1") => ({
+  board: { id: "Sweep", version: definition.repeat(32) },
+  keymap: {
+    id: `Sweep/${letterLayout}`,
+    version: `${vil}${definition}`.repeat(16),
+  },
+  letterLayout,
+  layers: [],
+  vilHash: vil.repeat(32),
+});
+const keyboards: KeyboardCatalogue = [
+  {
+    id: "Sweep",
+    name: "Sweep",
+    layouts: [layout("free-range", "a1"), layout("QWERTY", "b2")],
+  },
+  { id: "Q4", name: "Q4", layouts: [layout("QWERTY", "c3")] },
+];
 const config = {
   enabled: true,
   schemaVersion: 1,
-  snapshots: fixtureSnapshots,
   applicationRevision: "test",
-  board: null,
-  keymap: null,
+  keyboards,
 };
+const freeRange = { keyboard: "Sweep", keymap: keyboards[0].layouts[0].keymap };
 const start = (): RecordingRecord => ({
   schemaVersion: 1,
   attemptId: crypto.randomUUID(),
@@ -33,7 +51,9 @@ const offline: typeof fetch = async (url) => {
   if (url === "/_/recording/config") return Response.json(config);
   throw new Error("offline");
 };
+/** Web Locks for enabled runtimes, and a remembered valid keyboard selection. */
 function installLocks(t: { after: (fn: () => void) => void }) {
+  window.localStorage.setItem(selectionKey, JSON.stringify(freeRange));
   const previous = Object.getOwnPropertyDescriptor(navigator, "locks");
   Object.defineProperty(navigator, "locks", {
     configurable: true,
@@ -53,7 +73,13 @@ test("disabled recording never opens browser storage or installs a sink", async 
     },
   );
   await runtime.start();
-  assert.deepEqual(runtime.state, { options: null, status: null });
+  assert.deepEqual(runtime.state, {
+    options: null,
+    activity: null,
+    status: null,
+    keyboards: null,
+    selection: null,
+  });
   runtime.close();
 });
 
@@ -175,7 +201,13 @@ test("configuration failure without an enabled cache stays silent", async () => 
     throw new TypeError("Failed to fetch");
   });
   await runtime.start();
-  assert.deepEqual(runtime.state, { options: null, status: null });
+  assert.deepEqual(runtime.state, {
+    options: null,
+    activity: null,
+    status: null,
+    keyboards: null,
+    selection: null,
+  });
   runtime.close();
 });
 
@@ -348,4 +380,133 @@ test("same-turn failed keystroke and committed end cannot resurrect a pruned att
       interrupted: false,
     },
   ]);
+});
+
+test("recording waits for a keyboard and layout selection; ordinary practice is unobserved", async (t) => {
+  installLocks(t);
+  window.localStorage.removeItem(selectionKey);
+  const queue = await RecordingQueue.open(new IDBFactory());
+  const runtime = new RecordingRuntime(offline, async () => queue);
+  t.after(() => runtime.close());
+  await runtime.start();
+  assert.equal(runtime.state.options, null);
+  assert.deepEqual(runtime.state.keyboards, keyboards);
+  assert.deepEqual(runtime.state.activity, { type: "choose-keyboard" });
+
+  runtime.select({ keyboard: "Sweep", keymap: null });
+  assert.equal(runtime.state.options, null);
+  assert.deepEqual(runtime.state.activity, {
+    type: "choose-layout",
+    keyboard: "Sweep",
+  });
+
+  runtime.select(freeRange);
+  const options = runtime.state.options!;
+  assert.deepEqual(
+    [options.board, options.keymap, options.applicationRevision],
+    [keyboards[0].layouts[0].board, freeRange.keymap, "test"],
+  );
+  assert.deepEqual(runtime.state.activity, {
+    type: "active",
+    keyboard: keyboards[0],
+    layout: keyboards[0].layouts[0],
+  });
+  assert.deepEqual(
+    JSON.parse(window.localStorage.getItem(selectionKey)!),
+    freeRange,
+  );
+  // Reselecting the same context keeps the recorder, so practice is not reset.
+  runtime.select({ ...freeRange });
+  assert.equal(runtime.state.options, options);
+  runtime.select(null);
+  assert.equal(runtime.state.options, null);
+  assert.equal(window.localStorage.getItem(selectionKey), null);
+});
+
+test("a remembered selection survives reload, including offline reloads", async (t) => {
+  installLocks(t);
+  const factory = new IDBFactory();
+  const qwerty = { keyboard: "Sweep", keymap: keyboards[0].layouts[1].keymap };
+  const first = new RecordingRuntime(offline, () =>
+    RecordingQueue.open(factory),
+  );
+  t.after(() => first.close());
+  await first.start();
+  first.select(qwerty);
+  first.close();
+  for (const request of [
+    offline,
+    async () => {
+      throw new Error("Server down");
+    },
+  ]) {
+    const reloaded = new RecordingRuntime(request, () =>
+      RecordingQueue.open(factory),
+    );
+    t.after(() => reloaded.close());
+    await reloaded.start();
+    assert.deepEqual(reloaded.state.selection, qwerty);
+    assert.deepEqual(reloaded.state.options?.keymap, qwerty.keymap);
+    reloaded.close();
+  }
+});
+
+test("an unavailable remembered selection is visible and never replaced by another configuration", async (t) => {
+  installLocks(t);
+  for (const [remembered, activity] of [
+    // A layout version no longer offered, although Q4 has exactly one other layout.
+    [
+      { keyboard: "Q4", keymap: { id: "Q4/QWERTY", version: "gone" } },
+      {
+        type: "layout-unavailable",
+        keymap: { id: "Q4/QWERTY", version: "gone" },
+      },
+    ],
+    // A keyboard no longer offered.
+    [
+      { keyboard: "Sofle", keymap: { id: "Sofle/free-range", version: "x" } },
+      { type: "keyboard-unavailable", keyboard: "Sofle" },
+    ],
+  ] as const) {
+    window.localStorage.setItem(selectionKey, JSON.stringify(remembered));
+    const runtime = new RecordingRuntime(offline, () =>
+      RecordingQueue.open(new IDBFactory()),
+    );
+    t.after(() => runtime.close());
+    await runtime.start();
+    assert.equal(runtime.state.options, null);
+    assert.deepEqual(runtime.state.selection, remembered);
+    assert.deepEqual(runtime.state.activity, activity);
+    assert.deepEqual(
+      JSON.parse(window.localStorage.getItem(selectionKey)!),
+      remembered,
+    );
+    runtime.close();
+  }
+});
+
+test("default requests call fetch as browsers require, not as a method", async (t) => {
+  window.localStorage.removeItem(selectionKey);
+  // Browsers reject fetch called with any receiver other than the global object.
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", function (this: unknown, url: string) {
+    if (this !== undefined && this !== globalThis)
+      throw new TypeError(
+        "Failed to execute 'fetch' on 'Window': Illegal invocation",
+      );
+    calls.push(url);
+    return Promise.resolve(Response.json({ enabled: false }));
+  });
+  const runtime = new RecordingRuntime();
+  await runtime.start();
+  runtime.close();
+  assert.deepEqual(calls, ["/_/recording/config"]);
+  const queue = await RecordingQueue.open(new IDBFactory());
+  t.after(() => queue.close());
+  await queue.enqueue(start(), "owner", []);
+  await assert.rejects(
+    new RecordingDelivery(queue).flush(),
+    /Invalid recording acknowledgement/,
+  );
+  assert.deepEqual(calls, ["/_/recording/config", "/_/recording/batches"]);
 });

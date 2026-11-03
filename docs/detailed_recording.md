@@ -9,20 +9,119 @@ using the backend listening port (omit the port for port 80). Other Host values
 receive an empty 403 response in recording mode.
 `APPLICATION_REVISION` optionally labels the application revision (default `local`).
 
-The practice page shows availability, queued records, recovery notices and
-incomplete/interrupted Attempt counts. Keyboard board/keymap snapshots are
-explicitly labelled fixtures until keyboard import/selection is implemented.
-Resolved application keyboard and lesson settings still accompany each Attempt.
+The practice page shows whether recording is active, the selected keyboard and
+layout, queued records, recovery notices and incomplete/interrupted Attempt
+counts. Recording is active only with a valid keyboard and layout selected (see
+[Keyboards](#keyboards)). Resolved application keyboard and lesson settings still
+accompany each Attempt.
 
 Records live in `DATA_DIR/recordings.sqlite`, separately from the account database
-and binary result history. Schema initialization is transactional and explicit;
-unsupported or unversioned existing schemas fail rather than being migrated or
-interpreted. Server records and immutable snapshots have no automatic expiry.
-`GET /_/recording/config` reports availability. `POST /_/recording/batches` accepts
+and binary result history. Database initialization and upgrades are transactional
+and explicit: database version 1 is migrated to version 2 when it is opened, and
+newer or unversioned databases fail rather than being interpreted. Server
+records and immutable snapshots have no automatic expiry.
+`GET /_/recording/config` reports availability and the imported keyboards. `POST /_/recording/batches` accepts
 schema version 1 JSON with `snapshots`, `records` and `recovery` arrays. Limits are
 256 KiB, 128 records, 128 recovery notices and 16 snapshots per request. Invalid
 bodies/versions return 400, conflicts return 409 and oversized bodies return 413.
 Disabled batch routes return 404 and never open the recording database.
+
+## Keyboards
+
+Every recorded Attempt names its physical keyboard (a typokiller Board) and the
+exact saved layout (a Keymap version). Import them from typokiller's keyboard
+export, then choose them on the practice page.
+
+```sh
+node root/keybr.js recording import-keyboards keyboards.json
+# Source equivalent:
+npx tsnode packages/server-cli/lib/main.ts recording import-keyboards keyboards.json
+```
+
+The import validates the whole file first and then writes it in one transaction,
+so an invalid or failed import changes nothing. It prints how many snapshots were
+new and how many were already present. Importing the same content again adds
+nothing. After typokiller saves a new .vil, changes a Board's vial.json or edits
+layer names, export and import again: the changed content becomes new snapshots,
+and earlier snapshots, and the Attempts that refer to them, never change. Reload
+the practice page to see newly imported keyboards.
+
+### Choosing a keyboard and layout
+
+With recording enabled, the practice page has **Keyboard** and **Layout**
+choices below the lesson. They are the physical keyboard you type on and its
+saved configuration, separate from keybr's own keyboard layout setting, which
+still controls lessons and groups native training progress. Each layout is
+labelled with its Letter layout and the first 8 characters of its saved .vil's
+sha256 (typokiller's version hash). If a keyboard has several definitions
+(vial.json versions), each label also names its definition.
+
+The choice is remembered in this browser's localStorage. Without a valid choice,
+practice works as usual and the status says recording is inactive. If the
+remembered layout is no longer offered, the status says so and recording stays
+inactive until you choose again; another layout is never chosen for you.
+Changing the keyboard or layout during practice ends the current Attempt with
+the `keyboard-change` reason and resets the lesson. The new choice applies only
+to the practice that follows. Each Attempt's start record freezes the board and
+keymap snapshot references in its context.
+
+### Export format
+
+`packages/keybr-recording/lib/keyboards.ts` defines the format (`keyboardExportSchema`),
+and `packages/keybr-recording/fixtures/keyboards/` holds a representative pair of
+exports: `initial.json`, and `updated.json` from the same database after the
+Sweep vial.json, a free-range .vil and the Sweep QWERTY layer names changed. They
+use typokiller's Sweep, Sofle and Q4 test fixtures, with Letter layouts computed
+by typokiller's `keymap.py`.
+
+```json
+{
+  "format": "keybr-keyboard-export",
+  "formatVersion": 1,
+  "exportedAt": "2026-11-01T09:00:00Z",
+  "source": { "application": "typokiller" },
+  "boards": [
+    {
+      "sourceId": 1,
+      "name": "Sweep",
+      "vial": "<the Board's vial.json text>",
+      "keymaps": [
+        {
+          "sourceHash": "<sha256 of the .vil text>",
+          "vil": "<the saved .vil text>",
+          "letterLayout": "QWERTY",
+          "layers": ["Base", "Sym", "Nav", "Stack", "Num"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `sourceId` is the Board's id in the source database; `name` is its unique name.
+- `vial` and `vil` are the exact saved texts, as strings. Do not parse and
+  re-serialize them: a .vil `uid` can exceed JavaScript's safe integer range, and
+  hashes are taken over the UTF-8 text.
+- `keymaps` lists every saved .vil of the Board, oldest first. `sourceHash` must be
+  the sha256 of `vil`, as typokiller stores it; the import rejects a mismatch.
+- `letterLayout` is the computed Letter layout name (or its 30 letters if unnamed).
+- `layers` are display names from typokiller's `[keymaps.<Board>.<Letter layout>]`
+  settings, base layer first, or `[]` when there are none.
+- Unknown fields are rejected, so typing history, secrets or environment settings
+  cannot be included by mistake. Board names and `sourceId`s must be unique, and
+  a Board cannot list the same `sourceHash` twice.
+
+### Snapshot identity
+
+| Snapshot | `id`                           | `version`                                       | `configuration`                                                       |
+| -------- | ------------------------------ | ----------------------------------------------- | --------------------------------------------------------------------- |
+| `board`  | Board name                     | sha256 of the vial.json text                    | `name`, `vial`, `vialHash`                                            |
+| `keymap` | `<Board name>/<Letter layout>` | sha256 of the canonical JSON of `configuration` | `board` (`id`, `version`), `letterLayout`, `layers`, `vil`, `vilHash` |
+
+A keymap snapshot therefore freezes its .vil, its Board definition and its layer
+names together: the same .vil under a changed vial.json is a separate snapshot.
+Source identifiers (`application`, `sourceId`/`boardId`, `name`, `sourceHash`) are
+kept apart from content, in `keyboard_sources`, with the time each was first imported.
 
 ## Delivery and recovery
 
@@ -70,8 +169,11 @@ npx tsnode packages/server-cli/lib/main.ts recording export /tmp/recordings-expo
 ```
 
 The command implements `keybr recording export <file>`. Use a new output filename.
-The export includes `PRAGMA user_version`, `metadata`, `snapshots`, `attempts` and
-`records`. `attempts.context` and `records.json` retain the versioned contract;
+The export includes `PRAGMA user_version` (the database version, 2), `metadata`,
+`snapshots`, `keyboard_sources`, `attempts` and `records`. Each record also has
+its own contract `schemaVersion` (1). An Attempt's `context` names its `board` and
+`keymap` snapshots by `id` and `version`; read their `configuration` from
+`snapshots`, and `json.loads` the `vil`/`vial` texts. `attempts.context` and `records.json` retain the versioned contract;
 `incomplete` and `interrupted` are recovery flags, separate from lifecycle records.
 Order records by `(attempt_id, sequence)`; `observed_at` is the contract's monotonic
 observation time, while original event JSON includes browser `timeOrigin`.
@@ -88,7 +190,7 @@ import json
 import sqlite3
 
 with sqlite3.connect('/tmp/recordings-export.sqlite') as db:
-    assert db.execute('PRAGMA user_version').fetchone()[0] == 1
+    assert db.execute('PRAGMA user_version').fetchone()[0] == 2
     for attempt_id, sequence, payload in db.execute(
         'SELECT attempt_id, sequence, json FROM records ORDER BY attempt_id, sequence'
     ):

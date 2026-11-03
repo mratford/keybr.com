@@ -11,7 +11,10 @@ import {
 import { CustomTextLesson, lessonProps } from "@keybr/lesson";
 import { FakePhoneticModel } from "@keybr/phonetic-model";
 import { type RecordingRecord } from "@keybr/recording";
-import { RecordingContext } from "@keybr/recording-browser";
+import {
+  type RecorderOptions,
+  RecordingContext,
+} from "@keybr/recording-browser";
 import { type Result } from "@keybr/result";
 import { Settings, SettingsContext } from "@keybr/settings";
 import { act, fireEvent, render } from "@testing-library/react";
@@ -37,11 +40,12 @@ function setup(enabled = true) {
   let progress = makeProgress();
   const records: RecordingRecord[] = [];
   const results: Result[] = [];
-  const options = {
+  const onRecord = (r: RecordingRecord) => records.push(r);
+  let options: RecorderOptions | null = {
     applicationRevision: "controller-test",
     board: null,
     keymap: null,
-    onRecord: (r: RecordingRecord) => records.push(r),
+    onRecord,
   };
   const onResult = (result: Result) => {
     results.push(result);
@@ -99,6 +103,15 @@ function setup(enabled = true) {
     changeKeyboard() {
       keyboard = loadKeyboard(Layout.EN_DVORAK);
       progress = makeProgress();
+      view.rerender(tree());
+    },
+    /** A new physical keyboard selection, or none (recording inactive). */
+    selectContext(context: Pick<RecorderOptions, "board" | "keymap"> | null) {
+      options = context && {
+        applicationRevision: "controller-test",
+        ...context,
+        onRecord,
+      };
       view.rerender(tree());
     },
   };
@@ -372,4 +385,75 @@ test("Controller preserves an existing input inactivity deadline on modifier key
     ends(page.records).map((r) => r.reason),
     ["inactivity"],
   );
+});
+
+test("Controller ends the Attempt once when the physical keyboard changes and applies it only to fresh practice", async (t) => {
+  const page = setup();
+  t.after(() => page.view.unmount());
+  const user = userEvent.setup();
+  const sweep = {
+    board: { id: "Sweep", version: "b1" },
+    keymap: { id: "Sweep/free-range", version: "k1" },
+  };
+  const sofle = {
+    board: { id: "Sofle", version: "b2" },
+    keymap: { id: "Sofle/free-range", version: "k2" },
+  };
+  page.selectContext(sweep);
+  await user.click(page.input());
+  page.type("abc");
+  page.selectContext(sofle);
+  assert.deepEqual(
+    ends(page.records).map((r) => r.reason),
+    ["keyboard-change"],
+  );
+  const startsBefore = page.records.filter((r) => r.type === "start");
+  assert.deepEqual(
+    startsBefore.map((r) => r.type === "start" && r.context.keymap),
+    [sweep.keymap],
+  );
+
+  // Fresh practice starts from the beginning of the text under the new context.
+  page.type("abcdefghij", 2000);
+  const starts = page.records.filter((r) => r.type === "start");
+  assert.equal(starts.length, 2);
+  const second = starts[1];
+  assert.ok(second.type === "start");
+  assert.deepEqual(
+    [second.context.board, second.context.keymap],
+    [sofle.board, sofle.keymap],
+  );
+  assert.deepEqual(
+    ends(page.records).map((r) => r.reason),
+    ["keyboard-change", "completed"],
+  );
+  // Native progress is unaffected and still grouped by keybr's own layout.
+  assert.equal(page.results.length, 1);
+  assert.equal(page.results[0].layout, Layout.EN_US);
+  assert.equal(page.progress.summaryStats.count, 1);
+
+  // Clearing the selection ends nothing further while idle and stops recording.
+  const count = page.records.length;
+  page.selectContext(null);
+  page.type("abc", 5000);
+  assert.equal(page.records.length, count);
+  assert.deepEqual(
+    ends(page.records).map((r) => r.reason),
+    ["keyboard-change", "completed"],
+  );
+});
+
+test("Controller ends an in-progress Attempt once when recording becomes inactive", async (t) => {
+  const page = setup();
+  t.after(() => page.view.unmount());
+  const user = userEvent.setup();
+  await user.click(page.input());
+  page.type("ab");
+  page.selectContext(null);
+  page.type("abc", 3000);
+  assert.deepEqual(
+    ends(page.records).map((r) => r.reason),
+    ["keyboard-change"],
+  );
+  assert.equal(page.records.filter((r) => r.type === "start").length, 1);
 });

@@ -224,12 +224,11 @@ class LessonMemory {
     recorder: PracticeRecorder | null,
     recordingOptions: RecorderOptions | null,
   ) {
+    // The physical keyboard context, or none while recording is inactive.
+    const context = (options: RecorderOptions | null) =>
+      JSON.stringify(options && [options.board, options.keymap]);
     const contextChanged =
-      JSON.stringify([
-        this.#recordingOptions?.board,
-        this.#recordingOptions?.keymap,
-      ]) !==
-      JSON.stringify([recordingOptions?.board, recordingOptions?.keymap]);
+      context(this.#recordingOptions) !== context(recordingOptions);
     if (this.#recorder !== recorder)
       this.#recorder?.leave(
         contextChanged ? "keyboard-change" : "settings-change",
