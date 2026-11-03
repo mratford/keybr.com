@@ -4,11 +4,7 @@ import { Context } from "@fastr/core";
 import { BadRequestError, HttpError, NotFoundError } from "@fastr/errors";
 import { inject, injectable } from "@fastr/invert";
 import { Env } from "@keybr/config";
-import {
-  fixtureSnapshots,
-  maxBatchBytes,
-  schemaVersion,
-} from "@keybr/recording";
+import { maxBatchBytes, schemaVersion } from "@keybr/recording";
 import {
   RecordingConflict,
   RecordingStore,
@@ -29,12 +25,17 @@ export class RecordingController {
       ? {
           enabled,
           schemaVersion,
-          snapshots: fixtureSnapshots,
           applicationRevision: Env.getString("APPLICATION_REVISION", "local"),
-          board: { id: "fixture-board", version: "1" },
-          keymap: { id: "fixture-keymap", version: "2" },
+          // Imported with `keybr recording import-keyboards`; snapshots stay on the server.
+          keyboards: this.#open().keyboards(),
         }
       : { enabled: false };
+  }
+
+  #open() {
+    return (this.#store ??= new RecordingStore(
+      join(this.dataDir, "recordings.sqlite"),
+    ));
   }
 
   @http.POST("/_/recording/batches")
@@ -43,9 +44,9 @@ export class RecordingController {
     @body.json(null, { maxLength: maxBatchBytes }) value: unknown,
   ) {
     if (!Env.getBoolean("DETAILED_RECORDING", false)) throw new NotFoundError();
-    this.#store ??= new RecordingStore(join(this.dataDir, "recordings.sqlite"));
+    const store = this.#open();
     try {
-      ctx.response.body = this.#store.append(value);
+      ctx.response.body = store.append(value);
       ctx.response.headers.set("Cache-Control", "no-store");
     } catch (error) {
       if (error instanceof RecordingConflict)

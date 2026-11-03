@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,7 +10,11 @@ import { Application } from "@fastr/core";
 import { HttpError } from "@fastr/errors";
 import { Container } from "@fastr/invert";
 import { Router } from "@fastr/middleware-router";
-import { fixtureSnapshots, type RecordingRecord } from "@keybr/recording";
+import {
+  fixtureSnapshots,
+  recordingConfigSchema,
+  type RecordingRecord,
+} from "@keybr/recording";
 import { RecordingStore } from "@keybr/recording-store";
 import { createTestServer } from "../test/request.ts";
 import { RecordingController } from "./controller.ts";
@@ -49,12 +53,13 @@ test("recording routes are independent of login, bounded, versioned, transaction
   process.env.DETAILED_RECORDING = "true";
   const configResponse = await client.GET("/_/recording/config").send();
   assert.equal(configResponse.headers.get("Cache-Control"), "no-store");
-  const config = await configResponse.body.json<{
-    enabled: boolean;
-    schemaVersion: number;
-  }>();
-  assert.equal(config.enabled, true);
-  assert.equal(config.schemaVersion, 1);
+  const config = recordingConfigSchema.parse(await configResponse.body.json());
+  assert.deepEqual(config, {
+    enabled: true,
+    schemaVersion: 1,
+    applicationRevision: "local",
+    keyboards: [],
+  });
   const record: RecordingRecord = {
     schemaVersion: 1,
     attemptId: crypto.randomUUID(),
@@ -128,5 +133,78 @@ test("recording routes are independent of login, bounded, versioned, transaction
   assert.equal(
     (await client.POST("/_/recording/batches").send(batch)).status,
     500,
+  );
+});
+
+test("config lists imported keyboards, whose snapshots Attempts can reference without resending", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "keybr-recording-keyboards-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.mock.property(process, "env", {
+    ...process.env,
+    DETAILED_RECORDING: "true",
+    APPLICATION_REVISION: "rev-1",
+  });
+  const importer = new RecordingStore(join(dir, "recordings.sqlite"));
+  importer.importKeyboards(
+    JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../../keybr-recording/fixtures/keyboards/initial.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ),
+  );
+  importer.close();
+  const container = new Container();
+  container.bind("dataDir").toValue(dir);
+  const app = new Application(container).use(
+    new Router().registerAll(allToRoutes(RecordingController)).middleware(),
+  );
+  const client = request.use(start(createTestServer(app.callback())));
+  const config = recordingConfigSchema.parse(
+    await (await client.GET("/_/recording/config").send()).body.json(),
+  );
+  assert.ok(config.enabled);
+  assert.equal(config.applicationRevision, "rev-1");
+  assert.deepEqual(
+    config.keyboards.map((board) => board.name),
+    ["Q4", "Sofle", "Sweep"],
+  );
+  const layout = config.keyboards[2].layouts[0];
+  const startRecord = (keymap: { id: string; version: string }) => ({
+    schemaVersion: 1,
+    snapshots: [],
+    recovery: [],
+    records: [
+      {
+        schemaVersion: 1,
+        attemptId: crypto.randomUUID(),
+        sequence: 0,
+        observedAt: 0,
+        type: "start",
+        context: {
+          text: "abc",
+          applicationRevision: "rev-1",
+          board: layout.board,
+          keymap,
+          settings: { typing: {}, exercise: {}, layout: {} },
+        },
+      },
+    ],
+  });
+  assert.equal(
+    (await client.POST("/_/recording/batches").send(startRecord(layout.keymap)))
+      .status,
+    200,
+  );
+  assert.equal(
+    (
+      await client
+        .POST("/_/recording/batches")
+        .send(startRecord({ ...layout.keymap, version: "unknown" }))
+    ).status,
+    400,
   );
 });

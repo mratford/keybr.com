@@ -145,7 +145,7 @@ print(json.dumps([c.execute('pragma user_version').fetchone()[0], c.execute('sel
       { encoding: "utf8" },
     ),
   );
-  assert.deepEqual(actual, [1, records.length, 2, [1, 1]]);
+  assert.deepEqual(actual, [2, records.length, 2, [1, 1]]);
   assert.throws(() => store.export(filename), /different file/);
   assert.throws(() => store.export(output));
 });
@@ -153,7 +153,7 @@ print(json.dumps([c.execute('pragma user_version').fetchone()[0], c.execute('sel
 test("unsupported and unversioned database schemas are rejected", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "keybr-version-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  for (const version of [0, 2]) {
+  for (const version of [0, 3]) {
     const filename = join(dir, `${version}.sqlite`);
     const db = new DatabaseSync(filename);
     db.exec(`CREATE TABLE unknown (id TEXT); PRAGMA user_version=${version}`);
