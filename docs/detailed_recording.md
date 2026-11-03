@@ -149,7 +149,9 @@ The source is `packages/keybr-generators/layouts/en_free_range.json`. It maps th
 30 main keys of keybr's matrix geometry, row by row, to the base layer of
 typokiller's Sweep free-range `.vil`, with the Shift characters, and puts the
 space on the inner right thumb key. The `_` key types `-` with Shift, through the
-key override in the `.vil`. Regenerate
+key override in the `.vil`. The generator removes the `Space` key that it adds to
+every other layout. The matrix picture does not draw that key, so the thumb key
+must be the only space key for the next-key pointer to show the space. Regenerate
 `packages/keybr-keyboard/lib/layout/en_free_range.ts` from the source with:
 
 ```sh

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { deepEqual, equal, includes, isFalse } from "rich-assert";
+import { deepEqual, equal, includes, isFalse, isTrue } from "rich-assert";
 import { Geometry } from "./geometry.ts";
 import { KeyModifier } from "./keymodifier.ts";
 import { Language } from "./language.ts";
@@ -172,4 +172,13 @@ test("free-range has the space on the right thumb and nothing else", () => {
       .join(""),
     ` "',-.<>ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz`,
   );
+});
+
+test("free-range types the space with a key that the matrix draws", () => {
+  // The next-key pointer is drawn only on keys with a shape.
+  const keyboard = loadKeyboard(Layout.EN_FREE_RANGE);
+  const combo = keyboard.getCombo(0x0020);
+  equal(combo?.id, "ThumbClusterRight1");
+  isTrue(keyboard.getShape("ThumbClusterRight1") != null);
+  equal(keyboard.getCharacters("Space"), null);
 });

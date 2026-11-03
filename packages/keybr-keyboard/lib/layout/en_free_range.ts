@@ -34,6 +34,5 @@ export const LAYOUT_EN_FREE_RANGE: CharacterDict = {
   Comma: [/* LATIN SMALL LETTER Y */ 0x0079, /* LATIN CAPITAL LETTER Y */ 0x0059],
   Period: [/* FULL STOP */ 0x002e, /* GREATER-THAN SIGN */ 0x003e],
   Slash: [/* LATIN SMALL LETTER Q */ 0x0071, /* LATIN CAPITAL LETTER Q */ 0x0051],
-  Space: [/* SPACE */ 0x0020],
   ThumbClusterRight1: [/* SPACE */ 0x0020],
 };
