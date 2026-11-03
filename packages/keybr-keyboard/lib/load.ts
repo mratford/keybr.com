@@ -45,6 +45,7 @@ import { LAYOUT_EN_ENTHIUM_V11 } from "./layout/en_enthium_v11.ts";
 import { LAYOUT_EN_ENTHIUM_V13 } from "./layout/en_enthium_v13.ts";
 import { LAYOUT_EN_ENTHIUM_V14 } from "./layout/en_enthium_v14.ts";
 import { LAYOUT_EN_FOCAL } from "./layout/en_focal.ts";
+import { LAYOUT_EN_FREE_RANGE } from "./layout/en_free_range.ts";
 import { LAYOUT_EN_GALLIUM } from "./layout/en_gallium.ts";
 import { LAYOUT_EN_GALLIUM_MATRIX } from "./layout/en_gallium_matrix.ts";
 import { LAYOUT_EN_GALLIUM_NL } from "./layout/en_gallium_nl.ts";
@@ -168,6 +169,7 @@ const layouts = new Map<Layout, CharacterDict>([
   [Layout.EN_NERPS, LAYOUT_EN_NERPS],
   [Layout.EN_NERPS_MATRIX, LAYOUT_EN_NERPS_MATRIX],
   [Layout.EN_NIGHT_MATRIX, LAYOUT_EN_NIGHT_MATRIX],
+  [Layout.EN_FREE_RANGE, LAYOUT_EN_FREE_RANGE],
   [Layout.EN_NORMAN, LAYOUT_EN_NORMAN],
   [Layout.EN_STURDY, LAYOUT_EN_STURDY],
   [Layout.EN_UK, LAYOUT_EN_UK],

@@ -123,6 +123,56 @@ names together: the same .vil under a changed vial.json is a separate snapshot.
 Source identifiers (`application`, `sourceId`/`boardId`, `name`, `sourceHash`) are
 kept apart from content, in `keyboard_sources`, with the time each was first imported.
 
+## Free-range layout
+
+keybr has a **Free-range** layout (id `en-free-range`, binary id `0xfe`, family
+`free-range`) for a keyboard that types free-range from its own firmware, such as
+typokiller's Sweep. Choose it in keybr's own settings: language English, layout
+Free-range. Lessons, training progression and results then work as for any other
+layout. Free-range results are a separate layout family, so they never mix with
+QWERTY progress. The physical keyboard and layout choice for recording stays
+separate, as described in [Choosing a keyboard and layout](#choosing-a-keyboard-and-layout).
+
+### Hardware-remapped input
+
+The firmware already sends the free-range characters to the OS. Keep the OS input
+source on QWERTY (US or Australian). The browser then reports, for example,
+`code: "KeyX"` and `key: "x"` for the top-left key. keybr does not emulate this
+layout: both emulation options in the keyboard settings are greyed out, whatever
+their saved value. Typed characters are therefore never remapped a second time.
+Home-row mods, Shift and Caps Word work as in the firmware, because keybr only
+sees the modifier and character events that the firmware sends.
+
+### Generation
+
+The source is `packages/keybr-generators/layouts/en_free_range.json`. It maps the
+30 main keys of keybr's matrix geometry, row by row, to the base layer of
+typokiller's Sweep free-range `.vil`, with the Shift characters, and puts the
+space on the inner right thumb key. The `_` key types `-` with Shift, through the
+key override in the `.vil`. The generator removes the `Space` key that it adds to
+every other layout. The matrix picture does not draw that key, so the thumb key
+must be the only space key for the next-key pointer to show the space. Regenerate
+`packages/keybr-keyboard/lib/layout/en_free_range.ts` from the source with:
+
+```sh
+cd packages/keybr-generators
+npm run generate-layouts
+```
+
+Do not edit the generated file. `packages/keybr-keyboard/lib/free-range.test.ts`
+checks the registered characters against the Sweep `.vil` and `vial.json` in
+`packages/keybr-recording/fixtures/keyboards/initial.json`, which are typokiller's
+own test fixtures.
+
+### Limitations
+
+- The keyboard picture is keybr's standard matrix, not the Sweep. It shows only the
+  base layer of the 30 main keys and the space. Keys on other layers (digits and
+  symbols) are not drawn, but typing them still works.
+- The highlight of a pressed key follows the browser's `code`, which is the QWERTY
+  position of the character. For example, the top-left key highlights the key
+  that shows `w`. The pointer to the next key to type is correct.
+
 ## Delivery and recovery
 
 A dedicated IndexedDB database, `keybr-detailed-recording` (version 1), stores

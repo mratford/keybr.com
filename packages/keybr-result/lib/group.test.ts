@@ -74,3 +74,16 @@ test("group results by date", () => {
   deepEqual(map.get(new LocalDate(2001, 1, 3)), [r4]);
   deepEqual(map.get(new LocalDate(2001, 1, 4)), []);
 });
+
+test("free-range results form their own layout family", () => {
+  const faker = new ResultFaker();
+  const qwerty = faker.nextResult({ layout: Layout.EN_US });
+  const freeRange = faker.nextResult({ layout: Layout.EN_FREE_RANGE });
+  const uk = faker.nextResult({ layout: Layout.EN_UK });
+
+  const groups = ResultGroups.byLayoutFamily([qwerty, freeRange, uk]);
+
+  deepEqual([...groups.keys()], ["qwerty", "free-range"]);
+  deepEqual(groups.get("free-range"), [freeRange]);
+  deepEqual(groups.get("qwerty"), [qwerty, uk]);
+});

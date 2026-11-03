@@ -47,6 +47,7 @@ for (const [id, layout] of [
   ["en_enthium_v13", importKeymap("layouts/enthium_v13.json")],
   ["en_enthium_v14", importKeymap("layouts/enthium_v14.json")],
   ["en_focal", importKeymap("layouts/en_focal.json")],
+  ["en_free_range", thumbSpace(importKeymap("layouts/en_free_range.json"))],
   ["en_gallium", importKlc("layouts/en_gallium.klc")],
   ["en_gallium_matrix", importKlc("layouts/en_gallium_matrix.klc")],
   ["en_gallium_nl", importKlc("layouts/en_gallium_nl.klc")],
@@ -121,4 +122,13 @@ for (const [id, layout] of [
 /** Removes dead keys from the given keyboard layout. */
 function undead(layout: CharacterDict): CharacterDict {
   return Object.fromEntries(Object.entries(layout).map(([id, [a, b]]) => [id, [a, b]]));
+}
+
+/**
+ * Removes the `Space` key, which the importer always adds, from a layout that
+ * types the space with a thumb key. The matrix geometry does not draw `Space`,
+ * so the thumb key must be the only key that types the space.
+ */
+function thumbSpace(layout: CharacterDict): CharacterDict {
+  return Object.fromEntries(Object.entries(layout).filter(([id]) => id !== "Space"));
 }

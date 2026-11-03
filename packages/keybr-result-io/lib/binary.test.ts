@@ -59,3 +59,29 @@ test("write and read", () => {
   deepEqual(readResult(reader), expected);
   equal(reader.remaining(), 0);
 });
+
+test("write and read a free-range result", () => {
+  const result = new Result(
+    /* layout= */ Layout.EN_FREE_RANGE,
+    /* textType= */ TextType.GENERATED,
+    /* timeStamp= */ Date.parse("2026-11-03T03:05:06Z"),
+    /* length= */ 123,
+    /* time= */ 12345,
+    /* errors= */ 3,
+    /* histogram= */ new Histogram([
+      { codePoint: 0x0074, hitCount: 11, missCount: 1, timeToType: 111 },
+    ]),
+  );
+
+  const writer = new Writer();
+  writeResult(writer, result);
+  const buffer = writer.buffer();
+
+  // The layout is stored as its single-byte xid.
+  equal(new Uint8Array(buffer)[0], 0xfe);
+  const reader = new Reader(buffer);
+  const read = readResult(reader);
+  equal(reader.remaining(), 0);
+  equal(read.layout, Layout.EN_FREE_RANGE);
+  deepEqual(read, result);
+});

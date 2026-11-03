@@ -240,10 +240,10 @@
 - `0xfb`:
 - `0xfc`:
 - `0xfd`:
-- `0xfe`:
+- `0xfe`: English/Free-range
 - `0xff`:
 
-98 allocated identifiers
+99 allocated identifiers
 
-142 free identifiers
+141 free identifiers
 

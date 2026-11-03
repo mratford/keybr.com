@@ -1310,6 +1310,21 @@ export class Layout implements XEnumItem {
     /* emulate= */ true,
     /* geometries= */ new Enum(Geometry.MATRIX),
   );
+  /**
+   * The free-range letters, for a keyboard that types them from its own
+   * firmware. The OS already receives the remapped characters, so keybr must
+   * not emulate the layout a second time. The xid is at the top of the free
+   * range so that it does not clash with layouts that upstream adds later.
+   */
+  static readonly EN_FREE_RANGE = new Layout(
+    /* id= */ "en-free-range",
+    /* xid= */ 0xfe,
+    /* name= */ "Free-range",
+    /* family= */ "free-range",
+    /* language= */ Language.EN,
+    /* emulate= */ false,
+    /* geometries= */ new Enum(Geometry.MATRIX),
+  );
   static readonly EN_MTGAP = new Layout(
     /* id= */ "en-mtgap",
     /* xid= */ 0xaa,
@@ -1425,6 +1440,7 @@ export class Layout implements XEnumItem {
     Layout.EN_NERPS,
     Layout.EN_NERPS_MATRIX,
     Layout.EN_NIGHT_MATRIX,
+    Layout.EN_FREE_RANGE,
     Layout.EN_HANDS_DOWN_NEU,
     Layout.EN_HANDS_DOWN_PROMETHIUM,
     Layout.EN_HANDS_DOWN_PROMETHIUM_INVERTED,
