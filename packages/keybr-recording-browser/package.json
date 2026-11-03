@@ -13,9 +13,12 @@
     "@keybr/settings": "*",
     "@keybr/textinput": "*",
     "@keybr/textinput-events": "*",
-    "react": "^19.3.0"
+    "react": "^19.3.0",
+    "react-intl": "^12.1.2"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5"
+  },
   "scripts": {
     "clean": "rm -fr .types",
     "compile": "tsc",

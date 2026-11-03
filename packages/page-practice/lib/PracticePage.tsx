@@ -1,4 +1,5 @@
 import { KeyboardOptions, Layout } from "@keybr/keyboard";
+import { RecordingProvider } from "@keybr/recording-browser";
 import { Settings } from "@keybr/settings";
 import { ViewSwitch } from "@keybr/widget";
 import { views } from "./views.tsx";
@@ -18,5 +19,9 @@ function setDefaultLayout(localeId: string) {
 }
 
 export function PracticePage() {
-  return <ViewSwitch views={views} />;
+  return (
+    <RecordingProvider>
+      <ViewSwitch views={views} />
+    </RecordingProvider>
+  );
 }

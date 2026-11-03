@@ -12,7 +12,8 @@
     "@keybr/result-io": "*",
     "@keybr/result-userdata": "*",
     "commander": "^15.0.0",
-    "date-fns": "^4.4.0"
+    "date-fns": "^4.4.0",
+    "@keybr/recording-store": "*"
   },
   "devDependencies": {},
   "scripts": {
