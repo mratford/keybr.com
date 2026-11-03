@@ -2,6 +2,7 @@ import { Server, ServerResponse } from "node:http";
 import { userInfo } from "node:os";
 import { type Application } from "@fastr/core";
 import { injectable } from "@fastr/invert";
+import { Env } from "@keybr/config";
 import { Logger } from "@keybr/logger";
 import { WebSocketServer } from "ws";
 import { type Closer, createCloser } from "./closer.ts";
@@ -33,7 +34,10 @@ export class Service {
       res.shouldKeepAlive = false;
       callback(req, res);
     });
-    this.#server.listen(port);
+    this.#server.listen(
+      port,
+      Env.getBoolean("DETAILED_RECORDING", false) ? "127.0.0.1" : undefined,
+    );
     process.on("SIGINT", () => {
       this.stop();
     });

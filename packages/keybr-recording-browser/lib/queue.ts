@@ -1,0 +1,261 @@
+import {
+  canonicalJson,
+  maxBatchBytes,
+  type RecordingBatch,
+  type RecordingRecord,
+  schemaVersion,
+} from "@keybr/recording";
+
+type Attempt = {
+  id: string;
+  owner: string;
+  ended: boolean;
+  incomplete: boolean;
+  interrupted: boolean;
+};
+type Notice = RecordingBatch["recovery"][number];
+
+function result<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+function committed(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onabort = () =>
+      reject(tx.error ?? new Error("Recording transaction aborted"));
+    tx.onerror = () => {
+      /* onabort reports the transaction outcome. */
+    };
+  });
+}
+
+/** Every mutation is transactional across tabs; an acknowledgement deletes exact identities. */
+export class RecordingQueue {
+  private constructor(readonly database: IDBDatabase) {}
+
+  static async open(factory = indexedDB, name = "keybr-detailed-recording") {
+    const request = factory.open(name);
+    request.onupgradeneeded = (event) => {
+      if (event.oldVersion !== 0) {
+        request.transaction!.abort();
+        return;
+      }
+      const db = request.result;
+      db.createObjectStore("records", { keyPath: ["attemptId", "sequence"] });
+      db.createObjectStore("attempts", { keyPath: "id" });
+      db.createObjectStore("notices");
+      db.createObjectStore("snapshots", { keyPath: ["kind", "id", "version"] });
+    };
+    const db = await result(request);
+    if (db.version !== 1) {
+      db.close();
+      throw new Error(`Unsupported browser recording schema ${db.version}`);
+    }
+    db.onversionchange = () => db.close();
+    return new RecordingQueue(db);
+  }
+
+  async enqueue(
+    record: RecordingRecord,
+    owner: string,
+    snapshots: RecordingBatch["snapshots"],
+    incomplete = false,
+  ) {
+    const tx = this.database.transaction(
+      ["records", "attempts", "notices", "snapshots"],
+      "readwrite",
+    );
+    const done = committed(tx);
+    const attempts = tx.objectStore("attempts");
+    const request = attempts.get(record.attemptId);
+    request.onsuccess = () => {
+      const attempt: Attempt = request.result ?? {
+        id: record.attemptId,
+        owner,
+        ended: false,
+        incomplete: false,
+        interrupted: false,
+      };
+      attempt.ended ||= record.type === "end";
+      attempt.incomplete ||= incomplete;
+      attempts.put(attempt);
+      if (attempt.incomplete) this.notice(tx, attempt);
+    };
+    tx.objectStore("records").add(record);
+    for (const snapshot of snapshots) {
+      const store = tx.objectStore("snapshots");
+      const existing = store.get([
+        snapshot.kind,
+        snapshot.id,
+        snapshot.version,
+      ]);
+      existing.onsuccess = () => {
+        if (
+          existing.result &&
+          canonicalJson(existing.result) !== canonicalJson(snapshot)
+        )
+          tx.abort();
+        else if (!existing.result) store.add(snapshot);
+      };
+    }
+    await done;
+  }
+
+  async markIncomplete(id: string, owner: string) {
+    const tx = this.database.transaction(["attempts", "notices"], "readwrite");
+    const done = committed(tx);
+    const store = tx.objectStore("attempts");
+    const request = store.get(id);
+    request.onsuccess = () => {
+      const attempt: Attempt = request.result ?? {
+        id,
+        owner,
+        ended: false,
+        interrupted: false,
+        incomplete: true,
+      };
+      attempt.incomplete = true;
+      store.put(attempt);
+      this.notice(tx, attempt);
+    };
+    await done;
+  }
+
+  private notice(tx: IDBTransaction, attempt: Attempt) {
+    const value: Notice = {
+      attemptId: attempt.id,
+      incomplete: attempt.incomplete,
+      interrupted: attempt.interrupted,
+    };
+    tx.objectStore("notices").put(value, canonicalJson(value));
+  }
+
+  async owners(): Promise<string[]> {
+    const tx = this.database.transaction("attempts");
+    const attempts = await result<Attempt[]>(
+      tx.objectStore("attempts").getAll(),
+    );
+    return [
+      ...new Set(
+        attempts.filter((a) => !a.ended && !a.interrupted).map((a) => a.owner),
+      ),
+    ];
+  }
+
+  /** Caller holds the former owner's exclusive Web Lock, proving it is no longer active. */
+  async interrupt(owner: string) {
+    const tx = this.database.transaction(["attempts", "notices"], "readwrite");
+    const done = committed(tx);
+    const request = tx.objectStore("attempts").openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const attempt: Attempt = cursor.value;
+      if (attempt.owner === owner && !attempt.ended && !attempt.interrupted) {
+        attempt.interrupted = true;
+        cursor.update(attempt);
+        this.notice(tx, attempt);
+      }
+      cursor.continue();
+    };
+    await done;
+  }
+
+  async batch(byteLimit = maxBatchBytes): Promise<RecordingBatch> {
+    const tx = this.database.transaction(["records", "notices", "snapshots"]);
+    const [records, recovery, snapshots] = await Promise.all([
+      result<RecordingRecord[]>(
+        tx.objectStore("records").getAll(undefined, 128),
+      ),
+      result<Notice[]>(tx.objectStore("notices").getAll(undefined, 128)),
+      result<RecordingBatch["snapshots"]>(tx.objectStore("snapshots").getAll()),
+    ]);
+    const batch: RecordingBatch = {
+      schemaVersion,
+      snapshots,
+      records: [],
+      recovery: [],
+    };
+    const fits = () =>
+      new TextEncoder().encode(JSON.stringify(batch)).length <= byteLimit;
+    for (const notice of recovery) {
+      batch.recovery.push(notice);
+      if (!fits()) {
+        batch.recovery.pop();
+        break;
+      }
+    }
+    for (const record of records) {
+      batch.records.push(record);
+      if (!fits()) {
+        batch.records.pop();
+        if (
+          !batch.records.length &&
+          !batch.recovery.length &&
+          byteLimit === maxBatchBytes
+        )
+          throw new Error(
+            "Recording record exceeds transport limit; retained in browser",
+          );
+        break;
+      }
+    }
+    return batch;
+  }
+
+  async acknowledge(
+    batch: RecordingBatch,
+    ack: {
+      records: { attemptId: string; sequence: number }[];
+      recovery: Notice[];
+    },
+  ) {
+    // Never trust an acknowledgement for an identity outside this exact request.
+    const records = new Set(
+      batch.records.map((r) => canonicalJson([r.attemptId, r.sequence])),
+    );
+    const notices = new Set(batch.recovery.map(canonicalJson));
+    if (
+      !Array.isArray(ack.records) ||
+      !Array.isArray(ack.recovery) ||
+      ack.records.length !== batch.records.length ||
+      ack.recovery.length !== batch.recovery.length ||
+      new Set(ack.records.map((r) => canonicalJson([r.attemptId, r.sequence])))
+        .size !== records.size ||
+      new Set(ack.recovery.map(canonicalJson)).size !== notices.size ||
+      ack.records.some(
+        (r) => !records.has(canonicalJson([r.attemptId, r.sequence])),
+      ) ||
+      ack.recovery.some((r) => !notices.has(canonicalJson(r)))
+    )
+      throw new Error("Invalid recording acknowledgement");
+    const tx = this.database.transaction(["records", "notices"], "readwrite");
+    const done = committed(tx);
+    for (const record of ack.records)
+      tx.objectStore("records").delete([record.attemptId, record.sequence]);
+    for (const notice of ack.recovery)
+      tx.objectStore("notices").delete(canonicalJson(notice));
+    await done;
+  }
+
+  async status() {
+    const tx = this.database.transaction(["records", "attempts", "notices"]);
+    const [queued, notices, attempts] = await Promise.all([
+      result(tx.objectStore("records").count()),
+      result(tx.objectStore("notices").count()),
+      result<Attempt[]>(tx.objectStore("attempts").getAll()),
+    ]);
+    return {
+      queued,
+      notices,
+      incomplete: attempts.filter((a) => a.incomplete).length,
+      interrupted: attempts.filter((a) => a.interrupted).length,
+    };
+  }
+  close() {
+    this.database.close();
+  }
+}

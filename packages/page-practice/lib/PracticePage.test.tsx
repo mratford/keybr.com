@@ -10,7 +10,10 @@ import { PracticePage } from "./PracticePage.tsx";
 
 const faker = new ResultFaker();
 
-test("render", async () => {
+test("render", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    Response.json({ enabled: false }),
+  );
   PhoneticModelLoader.loader = FakePhoneticModel.loader;
 
   const r = render(

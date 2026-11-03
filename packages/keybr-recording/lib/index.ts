@@ -291,3 +291,84 @@ export function parseAttempt(value: unknown): RecordingRecord[] {
   if (!ended) throw new TypeError("Missing attempt end");
   return records;
 }
+
+/** Transport limits also apply to recovery metadata and configuration snapshots. */
+export const maxBatchBytes = 262144;
+export const snapshotSchema = z.strictObject({
+  kind: z.enum(["board", "keymap"]),
+  id: z.string().min(1),
+  version: z.string().min(1),
+  configuration: z.json(),
+});
+export const batchSchema = z.strictObject({
+  schemaVersion: z.literal(schemaVersion),
+  snapshots: z.array(snapshotSchema).max(16),
+  records: z.array(recordSchema).max(128),
+  recovery: z
+    .array(
+      z.strictObject({
+        attemptId: z.uuid(),
+        incomplete: z.boolean(),
+        interrupted: z.boolean(),
+      }),
+    )
+    .max(128),
+});
+export type RecordingBatch = z.infer<typeof batchSchema>;
+export const fixtureSnapshots: RecordingBatch["snapshots"] = [
+  {
+    kind: "board",
+    id: "fixture-board",
+    version: "1",
+    configuration: {
+      source: "fixture",
+      keys: [
+        { code: "KeyA", x: 0, y: 0, width: 1, height: 1 },
+        { code: "KeyB", x: 1, y: 0, width: 1, height: 1 },
+        { code: "KeyC", x: 2, y: 0, width: 1, height: 1 },
+      ],
+    },
+  },
+  {
+    kind: "keymap",
+    id: "fixture-keymap",
+    version: "2",
+    configuration: {
+      source: "fixture",
+      mappings: [
+        { code: "KeyA", key: "a" },
+        { code: "KeyB", key: "b" },
+        { code: "KeyC", key: "c" },
+      ],
+    },
+  },
+];
+
+/** Stable equality independent of JSON object property order. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value))
+    return "[" + value.map(canonicalJson).join(",") + "]";
+  if (value != null && typeof value === "object") {
+    return (
+      "{" +
+      Object.entries(value)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => JSON.stringify(k) + ":" + canonicalJson(v))
+        .join(",") +
+      "}"
+    );
+  }
+  return JSON.stringify(value);
+}
+
+export const recordingConfigSchema = z.discriminatedUnion("enabled", [
+  z.strictObject({ enabled: z.literal(false) }),
+  z.strictObject({
+    enabled: z.literal(true),
+    schemaVersion: z.literal(schemaVersion),
+    snapshots: z.array(snapshotSchema).max(16),
+    applicationRevision: z.string().min(1),
+    board: versionReference.nullable(),
+    keymap: versionReference.nullable(),
+  }),
+]);

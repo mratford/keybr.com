@@ -7,6 +7,7 @@ import { Controller as GameController } from "./game/index.ts";
 import { Controller as HighScoresController } from "./highscores/index.ts";
 import { Controller as PageController } from "./page/index.ts";
 import { Controller as ProfileController } from "./profile/index.ts";
+import { RecordingController } from "./recording/controller.ts";
 import { Controller as SettingsController } from "./settings/index.ts";
 import { Controller as SitemapController } from "./sitemap/index.ts";
 import { Controller as SyncController } from "./sync/index.ts";
@@ -23,6 +24,7 @@ export function mainRoutes(): Middleware<any> {
         SettingsController,
         SitemapController,
         SyncController,
+        RecordingController,
       ),
     )
     .middleware();
