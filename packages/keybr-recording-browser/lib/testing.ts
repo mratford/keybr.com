@@ -1,6 +1,7 @@
-import { keyboardProps, Layout, loadKeyboard } from "@keybr/keyboard";
+import { keyboardProps, loadKeyboard } from "@keybr/keyboard";
+import { lessonProps } from "@keybr/lesson";
 import { type EndReason, type RecordingRecord } from "@keybr/recording";
-import { Result, TextType } from "@keybr/result";
+import { Result } from "@keybr/result";
 import { Settings } from "@keybr/settings";
 import {
   type Feedback,
@@ -74,8 +75,8 @@ export function replayScenario(scenario: Scenario, enabled = true) {
       feedback.push(textInput.onInput(event));
       if (textInput.completed) {
         const result = Result.fromStats(
-          Layout.EN_US,
-          TextType.GENERATED,
+          settings.get(keyboardProps.layout),
+          settings.get(lessonProps.type).textType,
           1700000000000,
           makeStats(textInput.steps),
         );
