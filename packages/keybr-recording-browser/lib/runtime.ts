@@ -22,28 +22,30 @@ const selectionSchema = z.strictObject({
 });
 export const selectionKey = "keybr-detailed-recording-selection";
 
+/** Whether recording is active, and why not. The UI turns this into translated text. */
+export type RecordingActivity =
+  | {
+      readonly type: "active";
+      readonly keyboard: KeyboardCatalogue[number];
+      readonly layout: KeyboardLayout;
+    }
+  | { readonly type: "no-keyboards" }
+  | { readonly type: "choose-keyboard" }
+  | { readonly type: "keyboard-unavailable"; readonly keyboard: string }
+  | { readonly type: "choose-layout"; readonly keyboard: string }
+  | { readonly type: "layout-unavailable"; readonly keymap: SnapshotReference };
+
 export type RecordingState = {
   /** Present only while a valid keyboard and layout are selected. */
   options: RecorderOptions | null;
+  /** Null until the configuration is read, and while recording is not available. */
+  activity: RecordingActivity | null;
+  /** Queue, storage and network diagnostics. */
   status: string | null;
   /** Imported keyboards; null when detailed recording is not available. */
   keyboards: KeyboardCatalogue | null;
   selection: RecordingSelection | null;
 };
-
-/** A plain label: Letter layout and the saved .vil version, as typokiller names it. */
-export function layoutLabel(
-  keyboard: KeyboardCatalogue[number],
-  layout: KeyboardLayout,
-) {
-  const definitions = new Set(keyboard.layouts.map((l) => l.board.version));
-  return (
-    `${layout.letterLayout} · ${layout.vilHash.slice(0, 8)}` +
-    (definitions.size > 1
-      ? ` · keyboard definition ${layout.board.version.slice(0, 8)}`
-      : "")
-  );
-}
 
 const sameReference = (
   a: SnapshotReference | null | undefined,
@@ -54,6 +56,7 @@ const sameReference = (
 export class RecordingRuntime {
   state: RecordingState = {
     options: null,
+    activity: null,
     status: null,
     keyboards: null,
     selection: null,
@@ -72,7 +75,6 @@ export class RecordingRuntime {
   #ticking = false;
   #config?: Extract<RecordingConfig, { enabled: true }>;
   #sink?: Pick<RecorderOptions, "onRecord" | "onError">;
-  #activity = "";
   #queueStatus = "";
   readonly #online = () => {
     void this.tick();
@@ -185,6 +187,7 @@ export class RecordingRuntime {
       this.#sink = undefined;
       this.update({
         options: null,
+        activity: null,
         keyboards: null,
         status: available
           ? `Browser recording unavailable: ${String(error)}`
@@ -271,6 +274,7 @@ export class RecordingRuntime {
       sameReference(l.keymap, selection?.keymap),
     );
     let options: RecorderOptions | null = null;
+    let activity: RecordingActivity;
     if (keyboard && layout) {
       const current = this.state.options;
       options =
@@ -284,30 +288,25 @@ export class RecordingRuntime {
               keymap: layout.keymap,
               ...this.#sink!,
             };
-      this.#activity = `active on ${keyboard.name}, ${layoutLabel(keyboard, layout)}`;
+      activity = { type: "active", keyboard, layout };
     } else if (selection == null) {
-      this.#activity = config.keyboards.length
-        ? "inactive; choose a keyboard and layout"
-        : "inactive; no keyboards imported (keybr recording import-keyboards)";
+      activity = {
+        type: config.keyboards.length ? "choose-keyboard" : "no-keyboards",
+      };
     } else if (!keyboard) {
-      this.#activity = `inactive; the remembered keyboard ${JSON.stringify(selection.keyboard)} is not available, choose a keyboard and layout`;
+      activity = { type: "keyboard-unavailable", keyboard: selection.keyboard };
     } else if (selection.keymap == null) {
-      this.#activity = `inactive; choose a layout for ${keyboard.name}`;
+      activity = { type: "choose-layout", keyboard: keyboard.name };
     } else {
-      this.#activity = `inactive; the remembered layout ${selection.keymap.id} (${selection.keymap.version.slice(0, 8)}) is not available, choose a layout`;
+      activity = { type: "layout-unavailable", keymap: selection.keymap };
     }
-    this.update({ options, keyboards: config.keyboards, selection });
+    this.update({ options, activity, keyboards: config.keyboards, selection });
     this.#render();
   }
 
   #render() {
     this.update({
-      status: [
-        this.#activity,
-        this.#queueStatus,
-        this.#storageError,
-        this.#networkError,
-      ]
+      status: [this.#queueStatus, this.#storageError, this.#networkError]
         .filter(Boolean)
         .join("; "),
     });

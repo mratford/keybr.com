@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type KeyboardCatalogue } from "@keybr/recording";
 import { fireEvent, render } from "@testing-library/react";
-import { IntlProvider } from "react-intl";
-import { RecordingSelector } from "./RecordingProvider.tsx";
+import { createIntl, IntlProvider } from "react-intl";
+import {
+  layoutLabel,
+  RecordingActivityText,
+  RecordingSelector,
+} from "./RecordingProvider.tsx";
 import { type RecordingSelection, type RecordingState } from "./runtime.ts";
 
 const ref = (id: string, version: string) => ({ id, version });
@@ -35,6 +39,7 @@ function setup(selection: RecordingSelection | null) {
   const selected: (RecordingSelection | null)[] = [];
   const state: RecordingState = {
     options: null,
+    activity: null,
     status: null,
     keyboards,
     selection,
@@ -92,4 +97,78 @@ test("an unavailable remembered layout is shown as unselected, not replaced", (t
   t.after(() => missing.view.unmount());
   assert.equal(missing.keyboard.value, "");
   assert.equal(missing.layout.disabled, true);
+});
+
+test("layouts that differ only in layer names have different labels", () => {
+  const intl = createIntl({ locale: "en" });
+  const qwerty = (version: string, layers: string[]) => ({
+    board: ref("Sweep", "b".repeat(64)),
+    keymap: ref("Sweep/QWERTY", version.repeat(64)),
+    letterLayout: "QWERTY",
+    layers,
+    vilHash: "3a7e9c85".repeat(8),
+  });
+  const keyboard = {
+    id: "Sweep",
+    name: "Sweep",
+    layouts: [
+      qwerty("1", ["Main", "Sym"]),
+      qwerty("2", ["Base", "Sym"]),
+      qwerty("3", []),
+      { ...qwerty("4", []), vilHash: "e".repeat(64) },
+    ],
+  };
+  assert.deepEqual(
+    keyboard.layouts.map((l) => layoutLabel(intl, keyboard, l)),
+    [
+      "QWERTY · 3a7e9c85 · layers Main, Sym",
+      "QWERTY · 3a7e9c85 · layers Base, Sym",
+      "QWERTY · 3a7e9c85 · no layer names",
+      "QWERTY · eeeeeeee",
+    ],
+  );
+  // Layer names that format the same still give different labels.
+  const same = {
+    ...keyboard,
+    layouts: [qwerty("1", ["A, B"]), qwerty("2", ["A", "B"])],
+  };
+  assert.deepEqual(
+    same.layouts.map((l) => layoutLabel(intl, same, l)),
+    [
+      "QWERTY · 3a7e9c85 · layers A, B · version 11111111",
+      "QWERTY · 3a7e9c85 · layers A, B · version 22222222",
+    ],
+  );
+});
+
+test("recording guidance is translated", (t) => {
+  const view = render(
+    <IntlProvider
+      locale="de"
+      messages={{
+        "recording.chooseLayout": "inaktiv; Layout für {keyboard} wählen",
+        "recording.layoutDefinition": "Tastaturdefinition {version}",
+        "recording.active": "aktiv auf {keyboard}, {layout}",
+      }}
+    >
+      <p>
+        <RecordingActivityText type="choose-layout" keyboard="Sweep" />
+      </p>
+      <p>
+        <RecordingActivityText
+          type="active"
+          keyboard={keyboards[0]}
+          layout={keyboards[0].layouts[0]}
+        />
+      </p>
+    </IntlProvider>,
+  );
+  t.after(() => view.unmount());
+  assert.deepEqual(
+    [...view.container.querySelectorAll("p")].map((p) => p.textContent),
+    [
+      "inaktiv; Layout für Sweep wählen",
+      "aktiv auf Sweep, free-range · ffffffff · Tastaturdefinition bbbbbbbb",
+    ],
+  );
 });

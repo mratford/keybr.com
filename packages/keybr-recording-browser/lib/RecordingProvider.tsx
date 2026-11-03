@@ -1,8 +1,9 @@
+import { type KeyboardCatalogue, type KeyboardLayout } from "@keybr/recording";
 import { type ReactNode, useSyncExternalStore } from "react";
-import { FormattedMessage, useIntl } from "react-intl";
+import { FormattedMessage, type IntlShape, useIntl } from "react-intl";
 import { RecordingContext } from "./context.ts";
 import {
-  layoutLabel,
+  type RecordingActivity,
   RecordingRuntime,
   type RecordingSelection,
   type RecordingState,
@@ -11,6 +12,7 @@ import {
 let runtime: RecordingRuntime | undefined;
 const initialState: RecordingState = {
   options: null,
+  activity: null,
   status: null,
   keyboards: null,
   selection: null,
@@ -44,17 +46,167 @@ export function RecordingProvider({
           onSelect={(selection) => runtime?.select(selection)}
         />
       )}
-      {state.status && (
+      {(state.activity || state.status) && (
         <small role="status">
           <FormattedMessage
             id="recording.status"
             defaultMessage="Recording: {status}"
-            values={{ status: state.status }}
+            values={{
+              status: [
+                state.activity && <RecordingActivityText {...state.activity} />,
+                state.status,
+              ]
+                .filter(Boolean)
+                .map((part, index) => (
+                  <span key={index}>
+                    {index > 0 && "; "}
+                    {part}
+                  </span>
+                )),
+            }}
           />
         </small>
       )}
     </RecordingContext.Provider>
   );
+}
+
+const short = (version: string) => version.slice(0, 8);
+
+/** Whether recording is active, and what to do when it is not. */
+export function RecordingActivityText(activity: RecordingActivity): ReactNode {
+  const intl = useIntl();
+  switch (activity.type) {
+    case "active":
+      return (
+        <FormattedMessage
+          id="recording.active"
+          defaultMessage="active on {keyboard}, {layout}"
+          values={{
+            keyboard: activity.keyboard.name,
+            layout: layoutLabel(intl, activity.keyboard, activity.layout),
+          }}
+        />
+      );
+    case "no-keyboards":
+      return (
+        <FormattedMessage
+          id="recording.noKeyboards"
+          defaultMessage="inactive; no keyboards imported (keybr recording import-keyboards)"
+        />
+      );
+    case "choose-keyboard":
+      return (
+        <FormattedMessage
+          id="recording.chooseKeyboard"
+          defaultMessage="inactive; choose a keyboard and layout"
+        />
+      );
+    case "keyboard-unavailable":
+      return (
+        <FormattedMessage
+          id="recording.keyboardUnavailable"
+          defaultMessage="inactive; the remembered keyboard {keyboard} is not available, choose a keyboard and layout"
+          values={{ keyboard: activity.keyboard }}
+        />
+      );
+    case "choose-layout":
+      return (
+        <FormattedMessage
+          id="recording.chooseLayout"
+          defaultMessage="inactive; choose a layout for {keyboard}"
+          values={{ keyboard: activity.keyboard }}
+        />
+      );
+    case "layout-unavailable":
+      return (
+        <FormattedMessage
+          id="recording.layoutUnavailable"
+          defaultMessage="inactive; the remembered layout {layout} ({version}) is not available, choose a layout"
+          values={{
+            layout: activity.keymap.id,
+            version: short(activity.keymap.version),
+          }}
+        />
+      );
+  }
+}
+
+/**
+ * A plain label: Letter layout and the saved .vil version, as typokiller names it.
+ * It adds only the details needed to tell this layout apart from the keyboard's
+ * other layouts: the keyboard definition, then the layer names, then, if labels
+ * are still equal, the keymap snapshot version.
+ */
+export function layoutLabel(
+  intl: IntlShape,
+  keyboard: KeyboardCatalogue[number],
+  layout: KeyboardLayout,
+): string {
+  const definitions = new Set(keyboard.layouts.map((l) => l.board.version));
+  const same = (a: KeyboardLayout, b: KeyboardLayout) =>
+    a.keymap.id === b.keymap.id && a.keymap.version === b.keymap.version;
+  const others = keyboard.layouts.filter((l) => !same(l, layout));
+  const label = (l: KeyboardLayout, withVersion: boolean) => {
+    const parts = [
+      intl.formatMessage(
+        {
+          id: "recording.layoutLabel",
+          defaultMessage: "{letterLayout} · {vil}",
+        },
+        { letterLayout: l.letterLayout, vil: short(l.vilHash) },
+      ),
+    ];
+    if (definitions.size > 1)
+      parts.push(
+        intl.formatMessage(
+          {
+            id: "recording.layoutDefinition",
+            defaultMessage: "keyboard definition {version}",
+          },
+          { version: short(l.board.version) },
+        ),
+      );
+    // Same .vil under the same definition: only the layer names differ.
+    if (
+      keyboard.layouts.some(
+        (o) =>
+          !same(o, l) &&
+          o.letterLayout === l.letterLayout &&
+          o.vilHash === l.vilHash &&
+          o.board.version === l.board.version,
+      )
+    )
+      parts.push(
+        l.layers.length
+          ? intl.formatMessage(
+              {
+                id: "recording.layoutLayers",
+                defaultMessage: "layers {layers}",
+              },
+              { layers: intl.formatList(l.layers, { type: "unit" }) },
+            )
+          : intl.formatMessage({
+              id: "recording.layoutNoLayers",
+              defaultMessage: "no layer names",
+            }),
+      );
+    if (withVersion)
+      parts.push(
+        intl.formatMessage(
+          {
+            id: "recording.layoutVersion",
+            defaultMessage: "version {version}",
+          },
+          { version: short(l.keymap.version) },
+        ),
+      );
+    return parts.join(" · ");
+  };
+  const text = label(layout, false);
+  return others.some((o) => label(o, false) === text)
+    ? label(layout, true)
+    : text;
 }
 
 /** The physical keyboard and saved layout, separate from keybr's virtual keyboard layout. */
@@ -65,7 +217,7 @@ export function RecordingSelector({
   readonly state: RecordingState;
   readonly onSelect: (selection: RecordingSelection | null) => void;
 }) {
-  const { formatMessage } = useIntl();
+  const intl = useIntl();
   const keyboard = keyboards?.find((k) => k.id === selection?.keyboard);
   const layoutValue = (ref: { id: string; version: string }) =>
     `${ref.id}\n${ref.version}`;
@@ -74,7 +226,7 @@ export function RecordingSelector({
       selection?.keymap != null &&
       layoutValue(l.keymap) === layoutValue(selection.keymap),
   );
-  const choose = formatMessage({
+  const choose = intl.formatMessage({
     id: "recording.choose",
     defaultMessage: "Choose…",
   });
@@ -118,7 +270,7 @@ export function RecordingSelector({
           <option value="">{choose}</option>
           {keyboard?.layouts.map((l) => (
             <option key={layoutValue(l.keymap)} value={layoutValue(l.keymap)}>
-              {layoutLabel(keyboard, l)}
+              {layoutLabel(intl, keyboard, l)}
             </option>
           ))}
         </select>

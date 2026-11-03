@@ -75,6 +75,7 @@ test("disabled recording never opens browser storage or installs a sink", async 
   await runtime.start();
   assert.deepEqual(runtime.state, {
     options: null,
+    activity: null,
     status: null,
     keyboards: null,
     selection: null,
@@ -202,6 +203,7 @@ test("configuration failure without an enabled cache stays silent", async () => 
   await runtime.start();
   assert.deepEqual(runtime.state, {
     options: null,
+    activity: null,
     status: null,
     keyboards: null,
     selection: null,
@@ -389,14 +391,14 @@ test("recording waits for a keyboard and layout selection; ordinary practice is 
   await runtime.start();
   assert.equal(runtime.state.options, null);
   assert.deepEqual(runtime.state.keyboards, keyboards);
-  assert.match(
-    runtime.state.status!,
-    /^inactive; choose a keyboard and layout;/,
-  );
+  assert.deepEqual(runtime.state.activity, { type: "choose-keyboard" });
 
   runtime.select({ keyboard: "Sweep", keymap: null });
   assert.equal(runtime.state.options, null);
-  assert.match(runtime.state.status!, /^inactive; choose a layout for Sweep/);
+  assert.deepEqual(runtime.state.activity, {
+    type: "choose-layout",
+    keyboard: "Sweep",
+  });
 
   runtime.select(freeRange);
   const options = runtime.state.options!;
@@ -404,10 +406,11 @@ test("recording waits for a keyboard and layout selection; ordinary practice is 
     [options.board, options.keymap, options.applicationRevision],
     [keyboards[0].layouts[0].board, freeRange.keymap, "test"],
   );
-  assert.match(
-    runtime.state.status!,
-    /^active on Sweep, free-range · a1a1a1a1;/,
-  );
+  assert.deepEqual(runtime.state.activity, {
+    type: "active",
+    keyboard: keyboards[0],
+    layout: keyboards[0].layouts[0],
+  });
   assert.deepEqual(
     JSON.parse(window.localStorage.getItem(selectionKey)!),
     freeRange,
@@ -450,12 +453,21 @@ test("a remembered selection survives reload, including offline reloads", async 
 
 test("an unavailable remembered selection is visible and never replaced by another configuration", async (t) => {
   installLocks(t);
-  for (const remembered of [
+  for (const [remembered, activity] of [
     // A layout version no longer offered, although Q4 has exactly one other layout.
-    { keyboard: "Q4", keymap: { id: "Q4/QWERTY", version: "gone" } },
+    [
+      { keyboard: "Q4", keymap: { id: "Q4/QWERTY", version: "gone" } },
+      {
+        type: "layout-unavailable",
+        keymap: { id: "Q4/QWERTY", version: "gone" },
+      },
+    ],
     // A keyboard no longer offered.
-    { keyboard: "Sofle", keymap: { id: "Sofle/free-range", version: "x" } },
-  ]) {
+    [
+      { keyboard: "Sofle", keymap: { id: "Sofle/free-range", version: "x" } },
+      { type: "keyboard-unavailable", keyboard: "Sofle" },
+    ],
+  ] as const) {
     window.localStorage.setItem(selectionKey, JSON.stringify(remembered));
     const runtime = new RecordingRuntime(offline, () =>
       RecordingQueue.open(new IDBFactory()),
@@ -464,10 +476,7 @@ test("an unavailable remembered selection is visible and never replaced by anoth
     await runtime.start();
     assert.equal(runtime.state.options, null);
     assert.deepEqual(runtime.state.selection, remembered);
-    assert.match(
-      runtime.state.status!,
-      /^inactive; the remembered .* is not available/,
-    );
+    assert.deepEqual(runtime.state.activity, activity);
     assert.deepEqual(
       JSON.parse(window.localStorage.getItem(selectionKey)!),
       remembered,
