@@ -40,8 +40,9 @@ The queue retries on startup, reconnection and every two seconds. Each batch
 commits atomically on the server before its exact record identities are
 acknowledged. Lost acknowledgements are safe to resend, including overlapping
 or reordered batches. Acknowledgements remove only those immutable identities,
-never records added while the request was in flight. Page exit tries a request
-under 48 KB; persisted data remains recoverable when that request fails.
+never records added while the request was in flight. When the page is hidden,
+a request under 48 KB is attempted with keepalive. On close or reload, that
+request may not run; queued records are delivered on the next visit.
 Typing never waits for the network.
 
 Browser storage failures are visible and mark the affected Attempt incomplete.
