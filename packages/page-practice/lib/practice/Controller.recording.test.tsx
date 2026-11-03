@@ -29,9 +29,14 @@ class FixedLesson extends CustomTextLesson {
   }
 }
 
-function setup(enabled = true) {
-  let settings = new Settings().set(keyboardProps.emulation, Emulation.None);
-  let keyboard = loadKeyboard(Layout.EN_US);
+function setup(
+  enabled = true,
+  { layout = Layout.EN_US, emulation = Emulation.None } = {},
+) {
+  let settings = new Settings()
+    .set(keyboardProps.layout, layout)
+    .set(keyboardProps.emulation, emulation);
+  let keyboard = loadKeyboard(layout);
   const makeProgress = () =>
     new Progress(
       settings,
@@ -456,4 +461,51 @@ test("Controller ends an in-progress Attempt once when recording becomes inactiv
     ["keyboard-change"],
   );
   assert.equal(page.records.filter((r) => r.type === "start").length, 1);
+});
+
+test("Controller records free-range practice typed on a remapping keyboard", async (t) => {
+  // The keyboard firmware types free-range and sends the QWERTY code of each
+  // character, so keybr's default forward emulation must not apply again.
+  const page = setup(true, {
+    layout: Layout.EN_FREE_RANGE,
+    emulation: Emulation.Forward,
+  });
+  t.after(() => page.view.unmount());
+  const user = userEvent.setup();
+  const sweep = {
+    board: { id: "Sweep", version: "b1" },
+    keymap: { id: "Sweep/free-range", version: "k1" },
+  };
+  page.selectContext(sweep);
+  await user.click(page.input());
+  page.type("abcdefghij");
+
+  const inputs = page.records.flatMap((r) =>
+    r.type === "processed" && r.event.type === "input"
+      ? [String.fromCodePoint(r.event.codePoint)]
+      : [],
+  );
+  assert.equal(inputs.join(""), "abcdefghij");
+  assert.equal(page.results.length, 1);
+  assert.equal(page.results[0].layout, Layout.EN_FREE_RANGE);
+  assert.equal(page.results[0].errors, 0);
+
+  // The record keeps both keybr's layout and the physical keyboard snapshot.
+  const [start] = page.records;
+  assert.ok(start.type === "start");
+  assert.deepEqual(
+    [start.context.board, start.context.keymap],
+    [sweep.board, sweep.keymap],
+  );
+  assert.equal(
+    start.context.settings.layout["keyboard.layout"],
+    "en-free-range",
+  );
+  assert.equal(
+    start.context.settings.layout["resolvedLayout"],
+    "en-free-range",
+  );
+  const [end] = ends(page.records);
+  assert.ok(end.type === "end");
+  assert.equal(end.result?.layout, "en-free-range");
 });

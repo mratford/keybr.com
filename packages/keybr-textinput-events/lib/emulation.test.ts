@@ -227,6 +227,48 @@ test("reverse emulation, incomplete events", () => {
   ]);
 });
 
+for (const emulation of [undefined, Emulation.Forward, Emulation.Reverse, Emulation.None]) {
+  test(`hardware free-range input is not remapped again (emulation ${emulation != null ? Emulation[emulation] : "default"})`, () => {
+    // Arrange.
+
+    let settings = new Settings();
+    if (emulation != null) {
+      settings = settings.set(keyboardProps.emulation, emulation);
+    }
+    const target = tracingListener();
+    const listener = emulateLayout(settings, loadKeyboard(Layout.EN_FREE_RANGE), target);
+
+    // Act.
+
+    // The firmware sends the QWERTY code of each character it types.
+    // A mod-tap key held for Shift sends ShiftLeft.
+    replay(
+      listener,
+      { timeStamp: 100, type: "keydown", code: "ShiftLeft", key: "Shift", modifiers: [] },
+      { timeStamp: 200, type: "keydown", code: "KeyT", key: "T", modifiers: ["Shift"] },
+      { timeStamp: 200, type: "input", inputType: "appendChar", codePoint: /* "T" */ 0x0054, timeToType: 111 },
+      { timeStamp: 300, type: "keyup", code: "KeyT", key: "T", modifiers: ["Shift"] },
+      { timeStamp: 400, type: "keyup", code: "ShiftLeft", key: "Shift", modifiers: [] },
+      { timeStamp: 500, type: "keydown", code: "KeyX", key: "x", modifiers: [] },
+      { timeStamp: 500, type: "input", inputType: "appendChar", codePoint: /* "x" */ 0x0078, timeToType: 222 },
+      { timeStamp: 600, type: "keyup", code: "KeyX", key: "x", modifiers: [] },
+    );
+
+    // Assert.
+
+    deepEqual(target.trace, [
+      "100,keydown,ShiftLeft,Shift",
+      "200,keydown,KeyT,T",
+      "200,appendChar,T,111",
+      "300,keyup,KeyT,T",
+      "400,keyup,ShiftLeft,Shift",
+      "500,keydown,KeyX,x",
+      "500,appendChar,x,222",
+      "600,keyup,KeyX,x",
+    ]);
+  });
+}
+
 function replay(target: InputListener, ...events: (IKeyboardEvent | IInputEvent)[]) {
   for (const event of events) {
     switch (event.type) {

@@ -47,6 +47,7 @@ for (const [id, layout] of [
   ["en_enthium_v13", importKeymap("layouts/enthium_v13.json")],
   ["en_enthium_v14", importKeymap("layouts/enthium_v14.json")],
   ["en_focal", importKeymap("layouts/en_focal.json")],
+  ["en_free_range", importKeymap("layouts/en_free_range.json")],
   ["en_gallium", importKlc("layouts/en_gallium.klc")],
   ["en_gallium_matrix", importKlc("layouts/en_gallium_matrix.klc")],
   ["en_gallium_nl", importKlc("layouts/en_gallium_nl.klc")],
